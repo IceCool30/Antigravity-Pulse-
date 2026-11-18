@@ -77,6 +77,7 @@ import com.example.viewmodel.ImageStudioUiState
 @Composable
 fun CopilotAndImageStudioScreen(
     messages: List<CopilotMessageEntity>,
+    activeEndpointUrl: String,
     selectedModel: GeminiCopilotModel,
     selectedPersona: CopilotRolePersona,
     chatUiState: CopilotChatUiState,
@@ -263,6 +264,32 @@ fun CopilotAndImageStudioScreen(
                 contentPadding = PaddingValues(vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                if (messages.isEmpty() && chatUiState is CopilotChatUiState.Idle) {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = surface),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, border, RoundedCornerShape(14.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "${selectedPersona.title} • ${selectedModel.displayTitle}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = accent
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Ask Gemini Copilot to architect prompts, debug stack traces, or optimize remote connection latency, then forward the refined plan directly to your Antigravity session.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = secondaryFg
+                                )
+                            }
+                        }
+                    }
+                }
                 items(messages, key = { it.id }) { msg ->
                     val isUser = msg.senderRole == "USER"
                     Card(
@@ -759,8 +786,8 @@ fun CopilotAndImageStudioScreen(
 
     if (showAddContextSheet) {
         AntigravityAddContextSheet(
-            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
-            activeWorkspaceName = "antigravity-pulse",
+            activeEndpointUrl = activeEndpointUrl,
+            activeWorkspaceName = "workspace",
             onAttachContext = { item ->
                 if (attachedContexts.none { it.id == item.id }) {
                     attachedContexts.add(item)
@@ -777,8 +804,8 @@ fun CopilotAndImageStudioScreen(
 
     if (showLiveVoiceModal) {
         GeminiLiveVoiceModal(
-            activeWorkspaceName = "antigravity-pulse",
-            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
+            activeWorkspaceName = "workspace",
+            activeEndpointUrl = activeEndpointUrl,
             onDispatchPromptToAntigravity = { spokenPrompt ->
                 onForwardToAntigravityAgent(spokenPrompt)
             },

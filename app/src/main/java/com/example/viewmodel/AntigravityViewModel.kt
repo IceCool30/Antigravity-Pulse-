@@ -12,25 +12,30 @@ import com.example.data.cloud.CloudSyncedSession
 import com.example.data.local.AgentSessionEntity
 import com.example.data.local.AntigravityDao
 import com.example.data.local.FileDiffEntity
-import com.example.data.local.InitialSeedData
 import com.example.data.local.ServerProfileEntity
 import com.example.data.local.SessionMessageEntity
 import com.example.data.local.TerminalLogEntity
 import com.example.data.remote.AntigravityBridgeClient
+import com.example.data.remote.ApprovalNotificationBus
 import com.example.data.remote.BridgeTelemetry
+import com.example.data.remote.RemoteFileEntry
 import com.example.data.remote.RetainedWebViewManager
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicLong
 
 sealed interface CloudUiState<out T> {
     data object Loading : CloudUiState<Nothing>
@@ -43,14 +48,18 @@ class AntigravityViewModel(
     private val bridgeClient: AntigravityBridgeClient = AntigravityBridgeClient()
 ) : ViewModel() {
 
-    // Eagerly retained flows guarantee 0ms rendering with zero reload when minimizing or switching tabs
+    private val idCounter = AtomicLong(0L)
+    private fun nextUniqueId(prefix: String): String {
+        return "${prefix}_${System.currentTimeMillis()}_${idCounter.incrementAndGet()}"
+    }
+
     val serverProfiles: StateFlow<List<ServerProfileEntity>> = dao.observeServerProfiles()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val sessions: StateFlow<List<AgentSessionEntity>> = dao.observeAgentSessions()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    private val _selectedSessionId = MutableStateFlow("sess_bridge_core")
+    private val _selectedSessionId = MutableStateFlow("")
     val selectedSessionId: StateFlow<String> = _selectedSessionId.asStateFlow()
 
     private val allMessages = dao.observeAllSessionMessages()
@@ -60,7 +69,7 @@ class AntigravityViewModel(
         allMessages,
         _selectedSessionId
     ) { messages, sessionId ->
-        messages.filter { it.sessionId == sessionId }
+        if (sessionId.isBlank()) messages else messages.filter { it.sessionId == sessionId }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val allDiffs = dao.observeAllDiffs()
@@ -70,8 +79,7 @@ class AntigravityViewModel(
         allDiffs,
         _selectedSessionId
     ) { diffs, sessionId ->
-        val filtered = diffs.filter { it.sessionId == sessionId }
-        filtered.ifEmpty { diffs }
+        if (sessionId.isBlank()) diffs else diffs.filter { it.sessionId == sessionId }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val allTerminalLogs = dao.observeAllTerminalLogs()
@@ -81,18 +89,43 @@ class AntigravityViewModel(
         allTerminalLogs,
         _selectedSessionId
     ) { logs, sessionId ->
-        val filtered = logs.filter { it.sessionId == sessionId }
-        filtered.ifEmpty { logs }
+        if (sessionId.isBlank()) logs else logs.filter { it.sessionId == sessionId }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val bridgeTelemetry: StateFlow<BridgeTelemetry> = bridgeClient.telemetry
 
+    private val _isExecutingCommand = MutableStateFlow(false)
+    val isExecutingCommand: StateFlow<Boolean> = _isExecutingCommand.asStateFlow()
+
     private val _statusBanner = MutableStateFlow<String?>(null)
     val statusBanner: StateFlow<String?> = _statusBanner.asStateFlow()
 
+    // Background Step Approval Notification events observed by MainActivity
+    private val _pendingApprovalNotificationEvents = MutableSharedFlow<SessionMessageEntity>(extraBufferCapacity = 16)
+    val pendingApprovalNotificationEvents: SharedFlow<SessionMessageEntity> =
+        _pendingApprovalNotificationEvents.asSharedFlow()
+
+    // Live Remote File Browser state
+    private val _remoteBrowsePath = MutableStateFlow(".")
+    val remoteBrowsePath: StateFlow<String> = _remoteBrowsePath.asStateFlow()
+
+    private val _remoteFileEntries = MutableStateFlow<List<RemoteFileEntry>>(emptyList())
+    val remoteFileEntries: StateFlow<List<RemoteFileEntry>> = _remoteFileEntries.asStateFlow()
+
+    private val _previewFilePath = MutableStateFlow<String?>(null)
+    val previewFilePath: StateFlow<String?> = _previewFilePath.asStateFlow()
+
+    private val _previewFileContent = MutableStateFlow<String?>(null)
+    val previewFileContent: StateFlow<String?> = _previewFileContent.asStateFlow()
+
+    private val _isLoadingRemoteFiles = MutableStateFlow(false)
+    val isLoadingRemoteFiles: StateFlow<Boolean> = _isLoadingRemoteFiles.asStateFlow()
+
+    private val _remoteFileError = MutableStateFlow<String?>(null)
+    val remoteFileError: StateFlow<String?> = _remoteFileError.asStateFlow()
+
     init {
         viewModelScope.launch {
-            InitialSeedData.ensureSeeded(dao)
             val profiles = dao.getAllServerProfilesOnce()
             val active = profiles.firstOrNull { it.isSelected } ?: profiles.firstOrNull()
             if (active != null) {
@@ -100,34 +133,147 @@ class AntigravityViewModel(
                     onRemoteWebSocketFrame(eventText)
                 }
             }
+            val existingSessions = dao.getAllSessionsOnce()
+            if (existingSessions.isNotEmpty() && _selectedSessionId.value.isBlank()) {
+                _selectedSessionId.value = existingSessions.first().id
+            }
+        }
+
+        // Listen for Approve & Run / Reject decisions tapped inside Android notification shade
+        viewModelScope.launch {
+            ApprovalNotificationBus.actions.collect { action ->
+                resolveStepApprovalById(
+                    messageId = action.messageId,
+                    command = action.command,
+                    approved = action.approved
+                )
+            }
         }
     }
 
+    /**
+     * Handles real-time frames arriving from the connected remote WebSocket bridge.
+     * Supports JSON-RPC terminal output (`terminal.output` / `terminal.exec`), step approval gates
+     * (`agent.requestApproval` / `TOOL_APPROVAL`), agent messages, and raw PTY output streams.
+     */
     private fun onRemoteWebSocketFrame(frameText: String) {
         viewModelScope.launch {
-            val sessionId = _selectedSessionId.value
+            val sessionId = ensureActiveSessionExists()
+            val now = System.currentTimeMillis()
+
+            try {
+                if (frameText.trimStart().startsWith("{")) {
+                    val json = JSONObject(frameText)
+                    val method = json.optString("method")
+                    val params = json.optJSONObject("params") ?: json.optJSONObject("result")
+
+                    // 1. Step Approval Request -> persist + trigger high-priority Android notification
+                    if (method.contains("approval", ignoreCase = true) ||
+                        params?.optString("role").equals("TOOL_APPROVAL", ignoreCase = true) ||
+                        params?.optString("type").equals("TOOL_APPROVAL", ignoreCase = true)
+                    ) {
+                        val cmd = params?.optString("command").orEmpty()
+                            .ifBlank { params?.optString("commandOrPath").orEmpty() }
+                            .ifBlank { "remote command" }
+                        val desc = params?.optString("content").orEmpty()
+                            .ifBlank { params?.optString("description").orEmpty() }
+                            .ifBlank { "Remote Antigravity agent requested approval to run a command." }
+                        val approvalMsg = SessionMessageEntity(
+                            id = nextUniqueId("appr"),
+                            sessionId = sessionId,
+                            senderRole = "TOOL_APPROVAL",
+                            content = desc,
+                            commandOrPath = cmd,
+                            approvalStatus = "PENDING",
+                            timestampEpoch = now
+                        )
+                        dao.insertSessionMessage(approvalMsg)
+                        _pendingApprovalNotificationEvents.tryEmit(approvalMsg)
+                        return@launch
+                    }
+
+                    // 2. Terminal Output Frame -> append to TerminalView LazyColumn
+                    if (method.startsWith("terminal") || params?.has("output") == true || params?.has("stdout") == true) {
+                        val cmd = params?.optString("command").orEmpty().ifBlank { "remote-pty-stream" }
+                        val out = params?.optString("output").orEmpty()
+                            .ifBlank { params?.optString("stdout").orEmpty() }
+                            .ifBlank { frameText }
+                        val code = params?.optInt("exitCode", 0) ?: 0
+                        val duration = params?.optInt("durationMs", 0) ?: 0
+
+                        dao.insertTerminalLog(
+                            TerminalLogEntity(
+                                id = nextUniqueId("term_ws"),
+                                sessionId = sessionId,
+                                command = cmd,
+                                output = out,
+                                exitCode = code,
+                                durationMs = duration,
+                                timestampEpoch = now
+                            )
+                        )
+                        return@launch
+                    }
+                }
+            } catch (_: Exception) {
+                // Treat non-JSON frames as direct remote messages/stream events
+            }
+
             dao.insertSessionMessage(
                 SessionMessageEntity(
-                    id = "ws_${System.currentTimeMillis()}",
+                    id = nextUniqueId("ws"),
                     sessionId = sessionId,
                     senderRole = "AGENT",
                     content = frameText,
-                    commandOrPath = "WebSocket Live Stream"
+                    commandOrPath = bridgeClient.telemetry.value.activeEndpoint
                 )
             )
         }
     }
 
+    private suspend fun ensureActiveSessionExists(): String {
+        val currentId = _selectedSessionId.value
+        if (currentId.isNotBlank()) return currentId
+
+        val existing = dao.getAllSessionsOnce()
+        if (existing.isNotEmpty()) {
+            val firstId = existing.first().id
+            _selectedSessionId.value = firstId
+            return firstId
+        }
+
+        val now = System.currentTimeMillis()
+        val newId = nextUniqueId("sess")
+        val activeServerId = serverProfiles.value.firstOrNull { it.isSelected }?.id ?: ""
+        val defaultWorkspaceName = serverProfiles.value.firstOrNull { it.isSelected }?.name
+            ?: "Remote Workspace"
+
+        dao.upsertAgentSession(
+            AgentSessionEntity(
+                id = newId,
+                serverId = activeServerId,
+                workspaceName = defaultWorkspaceName,
+                branchName = "main",
+                status = "ACTIVE",
+                lastSummary = "Active remote session",
+                messageCount = 0,
+                updatedAtEpoch = now
+            )
+        )
+        _selectedSessionId.value = newId
+        return newId
+    }
+
     fun selectSession(sessionId: String) {
         _selectedSessionId.value = sessionId
-        bridgeClient.recordBridgeEvent("Switched to session $sessionId in 0ms from local Room cache")
+        bridgeClient.recordBridgeEvent("Selected session $sessionId")
     }
 
     fun createNewSession(workspaceName: String, branchName: String, initialTaskPrompt: String) {
-        val cleanWorkspace = workspaceName.trim().ifEmpty { "antigravity-workspace" }
+        val cleanWorkspace = workspaceName.trim().ifEmpty { "Remote Workspace" }
         val cleanBranch = branchName.trim().ifEmpty { "main" }
-        val sessionId = "sess_${System.currentTimeMillis()}"
-        val activeServerId = serverProfiles.value.firstOrNull { it.isSelected }?.id ?: "srv_hybrid_sim"
+        val sessionId = nextUniqueId("sess")
+        val activeServerId = serverProfiles.value.firstOrNull { it.isSelected }?.id ?: ""
 
         viewModelScope.launch {
             val now = System.currentTimeMillis()
@@ -138,24 +284,14 @@ class AntigravityViewModel(
                     workspaceName = cleanWorkspace,
                     branchName = cleanBranch,
                     status = "ACTIVE",
-                    lastSummary = initialTaskPrompt.ifBlank { "Session initialized on $cleanBranch" },
-                    messageCount = 1,
+                    lastSummary = initialTaskPrompt.ifBlank { "Workspace $cleanWorkspace ($cleanBranch)" },
+                    messageCount = 0,
                     updatedAtEpoch = now
                 )
             )
             _selectedSessionId.value = sessionId
             if (initialTaskPrompt.isNotBlank()) {
-                sendPromptToAntigravityAgent(initialTaskPrompt)
-            } else {
-                dao.insertSessionMessage(
-                    SessionMessageEntity(
-                        id = "msg_init_$now",
-                        sessionId = sessionId,
-                        senderRole = "AGENT",
-                        content = "Attached to `$cleanWorkspace` (`$cleanBranch`). Local Room cache and WebSocket delta stream are pinned—minimizing the app will never reload this conversation.",
-                        timestampEpoch = now
-                    )
-                )
+                sendPromptToAntigravityAgent(initialTaskPrompt, sessionId)
             }
         }
     }
@@ -168,7 +304,11 @@ class AntigravityViewModel(
             }
             val ping = bridgeClient.measureLatency(profile.endpointUrl)
             dao.updateServerLatency(profile.id, ping)
-            _statusBanner.value = "Switched bridge to ${profile.name} (${ping}ms)"
+            _statusBanner.value = if (ping > 0) {
+                "Connected to ${profile.name} (${ping}ms)"
+            } else {
+                "Selected ${profile.name} (${profile.endpointUrl})"
+            }
         }
     }
 
@@ -180,13 +320,16 @@ class AntigravityViewModel(
         authToken: String,
         keepAlivePinned: Boolean
     ) {
+        val cleanUrl = endpointUrl.trim()
+        if (cleanUrl.isEmpty()) return
+
         viewModelScope.launch {
-            val profileId = existingId ?: "srv_${System.currentTimeMillis()}"
-            val ping = bridgeClient.measureLatency(endpointUrl)
+            val profileId = existingId ?: nextUniqueId("srv")
+            val ping = bridgeClient.measureLatency(cleanUrl)
             val entity = ServerProfileEntity(
                 id = profileId,
                 name = name.trim().ifEmpty { "Antigravity Host" },
-                endpointUrl = endpointUrl.trim().ifEmpty { "https://antigravity.local:8443" },
+                endpointUrl = cleanUrl,
                 connectionMode = connectionMode,
                 authToken = authToken.trim(),
                 keepAlivePinned = keepAlivePinned,
@@ -198,20 +341,35 @@ class AntigravityViewModel(
             bridgeClient.connectToEndpoint(entity.endpointUrl, entity.authToken) { frame ->
                 onRemoteWebSocketFrame(frame)
             }
-            _statusBanner.value = "Connected to ${entity.name} (${ping}ms)"
+            ensureActiveSessionExists()
+            _statusBanner.value = if (ping > 0) {
+                "Connected to ${entity.name} (${ping}ms)"
+            } else {
+                "Saved host ${entity.name} (${entity.endpointUrl})"
+            }
         }
     }
 
     fun pingActiveServer() {
-        val active = serverProfiles.value.firstOrNull { it.isSelected } ?: serverProfiles.value.firstOrNull() ?: return
+        val active = serverProfiles.value.firstOrNull { it.isSelected }
+            ?: serverProfiles.value.firstOrNull()
+        if (active == null) {
+            _statusBanner.value = "No remote host configured yet. Add your Antigravity URL first."
+            return
+        }
         viewModelScope.launch {
             val ping = bridgeClient.measureLatency(active.endpointUrl)
             dao.updateServerLatency(active.id, ping)
-            _statusBanner.value = "Bridge heartbeat verified: ${ping}ms round-trip"
+            _statusBanner.value = if (ping > 0) {
+                "Remote host responded: ${ping}ms round-trip"
+            } else {
+                "Ping completed for ${active.endpointUrl}"
+            }
         }
     }
 
     fun updateDraftAndScroll(sessionId: String, draft: String, scrollIndex: Int) {
+        if (sessionId.isBlank()) return
         viewModelScope.launch {
             dao.updateSessionDraftAndScroll(sessionId, draft, scrollIndex)
         }
@@ -222,157 +380,88 @@ class AntigravityViewModel(
         if (clean.isEmpty()) return
 
         viewModelScope.launch {
-            _selectedSessionId.value = targetSessionId
+            val sessionId = if (targetSessionId.isNotBlank()) targetSessionId else ensureActiveSessionExists()
+            _selectedSessionId.value = sessionId
             val now = System.currentTimeMillis()
-            // 1. Save user message immediately in Room (0ms UI update)
+
             dao.insertSessionMessage(
                 SessionMessageEntity(
-                    id = "msg_u_$now",
-                    sessionId = targetSessionId,
+                    id = nextUniqueId("msg_u"),
+                    sessionId = sessionId,
                     senderRole = "USER",
                     content = clean,
                     timestampEpoch = now
                 )
             )
-            dao.updateSessionDraftAndScroll(targetSessionId, "", 0)
+            dao.updateSessionDraftAndScroll(sessionId, "", 0)
 
-            // 2. Dispatch over WebSocket / JSON-RPC bridge + Retained WebView JS bridge
-            bridgeClient.sendJsonRpcMessage(
+            val sentOverWs = bridgeClient.sendJsonRpcMessage(
                 method = "agent.sendPrompt",
-                params = mapOf("sessionId" to targetSessionId, "prompt" to clean)
+                params = mapOf("sessionId" to sessionId, "prompt" to clean)
             )
             RetainedWebViewManager.injectPromptIntoWebView(clean)
 
-            // 3. Emit instant agent reasoning & execution feedback
-            delay(220)
-            val thoughtTime = System.currentTimeMillis()
-            dao.insertSessionMessage(
-                SessionMessageEntity(
-                    id = "msg_t_$thoughtTime",
-                    sessionId = targetSessionId,
-                    senderRole = "THOUGHT",
-                    content = "Executing task over persistent bridge for prompt: \"${clean.take(90)}\". Inspecting workspace AST and preparing incremental patch.",
-                    durationMs = 215,
-                    timestampEpoch = thoughtTime
-                )
+            dao.updateSessionStatus(
+                sessionId = sessionId,
+                status = if (sentOverWs) "ACTIVE" else "QUEUED",
+                summary = clean.take(80),
+                deltaCount = 1,
+                now = now
             )
 
-            delay(320)
-            val replyTime = System.currentTimeMillis()
-            val needsApproval = clean.contains("run", ignoreCase = true) ||
-                clean.contains("deploy", ignoreCase = true) ||
-                clean.contains("server", ignoreCase = true) ||
-                clean.contains("build", ignoreCase = true)
-
-            if (needsApproval) {
-                val suggestedCmd = "language_server --standalone --verify-task \"${clean.take(36).replace("\"", "")}\""
-                dao.insertSessionMessage(
-                    SessionMessageEntity(
-                        id = "msg_app_$replyTime",
-                        sessionId = targetSessionId,
-                        senderRole = "TOOL_APPROVAL",
-                        content = "Staged workspace changes and prepared verification command. Approve execution on remote host:",
-                        commandOrPath = suggestedCmd,
-                        approvalStatus = "PENDING",
-                        timestampEpoch = replyTime
-                    )
-                )
-                dao.updateSessionStatus(
-                    sessionId = targetSessionId,
-                    status = "AWAITING_APPROVAL",
-                    summary = "Pending approval: $suggestedCmd",
-                    deltaCount = 3,
-                    now = replyTime
-                )
-            } else {
-                dao.insertSessionMessage(
-                    SessionMessageEntity(
-                        id = "msg_a_$replyTime",
-                        sessionId = targetSessionId,
-                        senderRole = "AGENT",
-                        content = "Applied workspace update for: **$clean**.\n\n- Delta frame synced to local Room database in 11ms.\n- Code diff and terminal logs updated without reloading the web DOM.",
-                        commandOrPath = "src/bridge/AntigravitySessionHandler.ts",
-                        timestampEpoch = replyTime
-                    )
-                )
-                dao.updateSessionStatus(
-                    sessionId = targetSessionId,
-                    status = "ACTIVE",
-                    summary = "Completed: ${clean.take(65)}",
-                    deltaCount = 3,
-                    now = replyTime
-                )
+            if (!sentOverWs) {
+                val activeUrl = bridgeClient.telemetry.value.activeEndpoint
+                val notice = if (activeUrl.isBlank()) {
+                    "No remote host connected yet. Tap the top session dropdown -> 'Configure Remote Host' (or use the Web Bridge tab) to connect your live Antigravity URL."
+                } else {
+                    "Dispatched prompt to pinned Web Bridge ($activeUrl)."
+                }
+                _statusBanner.value = notice
             }
         }
     }
 
     fun resolveStepApproval(message: SessionMessageEntity, approved: Boolean) {
+        resolveStepApprovalById(message.id, message.commandOrPath, approved)
+    }
+
+    fun resolveStepApprovalById(messageId: String, command: String, approved: Boolean) {
         viewModelScope.launch {
             val newStatus = if (approved) "APPROVED" else "REJECTED"
-            dao.updateMessageApprovalStatus(message.id, newStatus)
+            dao.updateMessageApprovalStatus(messageId, newStatus)
             bridgeClient.sendJsonRpcMessage(
                 method = "agent.resolveApproval",
                 params = mapOf(
-                    "messageId" to message.id,
+                    "messageId" to messageId,
                     "approved" to approved,
-                    "command" to message.commandOrPath
+                    "command" to command
                 )
             )
-
-            val now = System.currentTimeMillis()
-            if (approved) {
-                val outputText = "[Antigravity Remote PTY] $ ${message.commandOrPath}\n" +
-                    "✓ Delta compression enabled (zstd frame streaming)\n" +
-                    "✓ WebSocket keep-alive pinned at 15,000ms\n" +
-                    "✓ Process active (exit code 0 in 38ms)"
-                dao.insertTerminalLog(
-                    TerminalLogEntity(
-                        id = "term_$now",
-                        sessionId = message.sessionId,
-                        command = message.commandOrPath.ifBlank { "language_server --standalone" },
-                        output = outputText,
-                        exitCode = 0,
-                        durationMs = 38,
-                        timestampEpoch = now
-                    )
-                )
-                dao.insertSessionMessage(
-                    SessionMessageEntity(
-                        id = "msg_exec_$now",
-                        sessionId = message.sessionId,
-                        senderRole = "TERMINAL",
-                        content = outputText,
-                        commandOrPath = message.commandOrPath,
-                        timestampEpoch = now
-                    )
-                )
-                dao.updateSessionStatus(
-                    sessionId = message.sessionId,
-                    status = "ACTIVE",
-                    summary = "Approved & executed: ${message.commandOrPath}",
-                    deltaCount = 1,
-                    now = now
-                )
-                _statusBanner.value = "Approved & executed on remote host"
+            _statusBanner.value = if (approved) {
+                "Approved step: $command"
             } else {
-                dao.insertSessionMessage(
-                    SessionMessageEntity(
-                        id = "msg_rej_$now",
-                        sessionId = message.sessionId,
-                        senderRole = "AGENT",
-                        content = "Command rejected by user (`${message.commandOrPath}`). Halted execution and awaiting alternative instructions.",
-                        timestampEpoch = now
-                    )
-                )
-                dao.updateSessionStatus(
-                    sessionId = message.sessionId,
-                    status = "IDLE",
-                    summary = "Step rejected by user",
-                    deltaCount = 1,
-                    now = now
-                )
-                _statusBanner.value = "Rejected pending agent command"
+                "Rejected step: $command"
             }
+            if (approved && command.isNotBlank()) {
+                runNativeTerminalCommand(command)
+            }
+        }
+    }
+
+    fun triggerTestApprovalNotification() {
+        viewModelScope.launch {
+            val sessionId = ensureActiveSessionExists()
+            val testMsg = SessionMessageEntity(
+                id = nextUniqueId("appr_test"),
+                sessionId = sessionId,
+                senderRole = "TOOL_APPROVAL",
+                content = "Test approval gate — approve or reject right from the Android notification shade.",
+                commandOrPath = "git status --short",
+                approvalStatus = "PENDING",
+                timestampEpoch = System.currentTimeMillis()
+            )
+            dao.insertSessionMessage(testMsg)
+            _pendingApprovalNotificationEvents.tryEmit(testMsg)
         }
     }
 
@@ -392,41 +481,127 @@ class AntigravityViewModel(
         }
     }
 
+    /**
+     * Executes a shell command over the remote bridge (`AntigravityBridgeClient.executeShellCommandOverBridge`)
+     * and appends the real-time execution output to the scrollable `TerminalView` log stream.
+     */
     fun runNativeTerminalCommand(commandText: String) {
         val cleanCmd = commandText.trim()
         if (cleanCmd.isEmpty()) return
-        val sessionId = _selectedSessionId.value
 
         viewModelScope.launch {
-            bridgeClient.sendJsonRpcMessage(
-                method = "terminal.exec",
-                params = mapOf("sessionId" to sessionId, "command" to cleanCmd)
-            )
-            val now = System.currentTimeMillis()
-            val simulatedOutput = when {
-                cleanCmd.contains("status") -> "On branch feat/zero-reload-websocket\nYour branch is up to date with 'origin/feat/zero-reload-websocket'.\nnothing to commit, working tree clean"
-                cleanCmd.contains("language_server") -> "Antigravity Language Server (--standalone) PID 14892\nListening on 0.0.0.0:42100 • WebSocket clients: 1 (Android Native Bridge)\nMemory RSS: 312MB • Frame latency: 9ms"
-                cleanCmd.contains("gradle") -> "> Task :app:compileDebugKotlin UP-TO-DATE\n> Task :app:assembleDebug\nBUILD SUCCESSFUL in 1s (42 actionable tasks: 2 executed, 40 up-to-date)"
-                cleanCmd.contains("mcp") || cleanCmd.contains("chrome") -> "Chrome DevTools MCP Server active on ws://127.0.0.1:9222/devtools/browser\nAttached targets: 2 pages, 0 throttled tabs"
-                else -> "$ $cleanCmd\n[Remote PTY Exit 0] Executed on Antigravity host in 24ms."
-            }
-            dao.insertTerminalLog(
-                TerminalLogEntity(
-                    id = "term_$now",
+            _isExecutingCommand.value = true
+            try {
+                val sessionId = ensureActiveSessionExists()
+                val result = bridgeClient.executeShellCommandOverBridge(
                     sessionId = sessionId,
-                    command = cleanCmd,
-                    output = simulatedOutput,
-                    exitCode = 0,
-                    durationMs = 24,
-                    timestampEpoch = now
+                    command = cleanCmd
                 )
-            )
+                val now = System.currentTimeMillis()
+                dao.insertTerminalLog(
+                    TerminalLogEntity(
+                        id = nextUniqueId("term"),
+                        sessionId = sessionId,
+                        command = result.command,
+                        output = result.output,
+                        exitCode = result.exitCode,
+                        durationMs = result.durationMs.toInt(),
+                        timestampEpoch = now
+                    )
+                )
+            } finally {
+                _isExecutingCommand.value = false
+            }
         }
+    }
+
+    fun sendTerminalCtrlC() {
+        viewModelScope.launch {
+            val sessionId = ensureActiveSessionExists()
+            bridgeClient.sendTerminalInterrupt(sessionId)
+            _statusBanner.value = "Sent SIGINT (^C) to remote PTY"
+        }
+    }
+
+    fun setAutoReconnectEnabled(enabled: Boolean) {
+        bridgeClient.setAutoReconnectEnabled(enabled)
+    }
+
+    fun browseRemoteDirectory(path: String) {
+        val targetPath = path.trim().ifBlank { "." }
+        _remoteBrowsePath.value = targetPath
+        _previewFilePath.value = null
+        _previewFileContent.value = null
+        viewModelScope.launch {
+            _isLoadingRemoteFiles.value = true
+            _remoteFileError.value = null
+            val res = bridgeClient.fetchRemoteDirectory(targetPath)
+            res.fold(
+                onSuccess = { entries ->
+                    _remoteFileEntries.value = entries
+                    if (entries.isEmpty()) {
+                        _remoteFileError.value = "Directory \"$targetPath\" is empty or remote bridge did not return workspace.listFiles entries."
+                    }
+                },
+                onFailure = { err ->
+                    _remoteFileEntries.value = emptyList()
+                    _remoteFileError.value = err.localizedMessage ?: "Failed to list remote directory"
+                }
+            )
+            _isLoadingRemoteFiles.value = false
+        }
+    }
+
+    fun openRemoteFile(path: String) {
+        val targetPath = path.trim()
+        if (targetPath.isBlank()) return
+        viewModelScope.launch {
+            _isLoadingRemoteFiles.value = true
+            _remoteFileError.value = null
+            val res = bridgeClient.fetchRemoteFileContent(targetPath)
+            res.fold(
+                onSuccess = { content ->
+                    _previewFilePath.value = targetPath
+                    _previewFileContent.value = content
+                },
+                onFailure = { err ->
+                    _remoteFileError.value = err.localizedMessage ?: "Failed to read remote file"
+                }
+            )
+            _isLoadingRemoteFiles.value = false
+        }
+    }
+
+    fun closeRemoteFilePreview() {
+        _previewFilePath.value = null
+        _previewFileContent.value = null
     }
 
     fun clearTerminalForActiveSession() {
         viewModelScope.launch {
-            dao.clearTerminalLogs(_selectedSessionId.value)
+            val sessionId = _selectedSessionId.value
+            if (sessionId.isNotBlank()) {
+                dao.clearTerminalLogs(sessionId)
+            } else {
+                dao.clearAllTerminalLogs()
+            }
+        }
+    }
+
+    fun clearAllLocalWorkspaceData() {
+        viewModelScope.launch {
+            dao.clearAllTerminalLogs()
+            dao.clearAllFileDiffs()
+            dao.clearAllSessionMessages()
+            dao.clearAllAgentSessions()
+            dao.clearAllServerProfiles()
+            dao.clearCopilotMessages()
+            _selectedSessionId.value = ""
+            _remoteFileEntries.value = emptyList()
+            _previewFilePath.value = null
+            _previewFileContent.value = null
+            bridgeClient.connectToEndpoint("", "") {}
+            _statusBanner.value = "Cleared all local workspace data"
         }
     }
 

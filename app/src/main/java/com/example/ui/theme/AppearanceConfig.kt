@@ -121,7 +121,11 @@ data class AppearanceSettings(
     val foregroundHex: String = "#FFFFFF",
     val accentHex: String = "#FFC799",
     val isFullscreenBarsHidden: Boolean = false,
-    val showStartupGuideOnLaunch: Boolean = true
+    val showStartupGuideOnLaunch: Boolean = true,
+    val isBiometricLockEnabled: Boolean = false,
+    val isApprovalNotificationsEnabled: Boolean = true,
+    val isAutoReconnectEnabled: Boolean = true,
+    val savedTerminalMacros: List<String> = emptyList()
 ) {
     val backgroundColor: Color
         get() = if (themeMode == AntigravityThemeMode.LIGHT) {
@@ -203,6 +207,12 @@ class AppearancePreferencesManager(context: Context) {
     private fun loadFromPrefs(): AppearanceSettings {
         val themeStr = prefs.getString("theme_mode", AntigravityThemeMode.DARK.name)
         val contrastStr = prefs.getString("contrast_mode", AntigravityContrastMode.STRONG.name)
+        val rawMacros = prefs.getString("saved_terminal_macros", "").orEmpty()
+        val parsedMacros = if (rawMacros.isBlank()) {
+            emptyList()
+        } else {
+            rawMacros.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        }
         return AppearanceSettings(
             themeMode = AntigravityThemeMode.entries.firstOrNull { it.name == themeStr }
                 ?: AntigravityThemeMode.DARK,
@@ -215,7 +225,11 @@ class AppearancePreferencesManager(context: Context) {
             foregroundHex = prefs.getString("fg_hex", "#FFFFFF") ?: "#FFFFFF",
             accentHex = prefs.getString("accent_hex", "#FFC799") ?: "#FFC799",
             isFullscreenBarsHidden = prefs.getBoolean("fullscreen_bars_hidden", false),
-            showStartupGuideOnLaunch = prefs.getBoolean("show_startup_guide_on_launch", true)
+            showStartupGuideOnLaunch = prefs.getBoolean("show_startup_guide_on_launch", true),
+            isBiometricLockEnabled = prefs.getBoolean("biometric_lock_enabled", false),
+            isApprovalNotificationsEnabled = prefs.getBoolean("approval_notifications_enabled", true),
+            isAutoReconnectEnabled = prefs.getBoolean("auto_reconnect_enabled", true),
+            savedTerminalMacros = parsedMacros
         )
     }
 
@@ -233,6 +247,10 @@ class AppearancePreferencesManager(context: Context) {
             .putString("accent_hex", next.accentHex)
             .putBoolean("fullscreen_bars_hidden", next.isFullscreenBarsHidden)
             .putBoolean("show_startup_guide_on_launch", next.showStartupGuideOnLaunch)
+            .putBoolean("biometric_lock_enabled", next.isBiometricLockEnabled)
+            .putBoolean("approval_notifications_enabled", next.isApprovalNotificationsEnabled)
+            .putBoolean("auto_reconnect_enabled", next.isAutoReconnectEnabled)
+            .putString("saved_terminal_macros", next.savedTerminalMacros.joinToString("\n"))
             .apply()
     }
 

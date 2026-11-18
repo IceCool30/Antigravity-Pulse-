@@ -76,11 +76,13 @@ fun SessionsAndChatScreen(
     sessions: List<AgentSessionEntity>,
     selectedSessionId: String,
     messages: List<SessionMessageEntity>,
+    activeEndpointUrl: String,
     isFullscreenBarsHidden: Boolean,
     searchQuery: String,
     onClearSearch: () -> Unit,
     onSelectSession: (String) -> Unit,
     onOpenNewSessionModal: () -> Unit,
+    onOpenServerModal: () -> Unit,
     onSendPrompt: (String) -> Unit,
     onResolveApproval: (SessionMessageEntity, Boolean) -> Unit,
     onUpdateDraft: (String, String, Int) -> Unit
@@ -230,6 +232,61 @@ fun SessionsAndChatScreen(
             contentPadding = PaddingValues(vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            if (displayedMessages.isEmpty()) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = surface),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .border(1.dp, border, RoundedCornerShape(16.dp))
+                            .testTag("sessions_clean_empty_state")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = if (activeEndpointUrl.isBlank()) {
+                                    "Ready to Connect Your Antigravity Remote Host"
+                                } else {
+                                    "Connected to $activeEndpointUrl"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = fg
+                            )
+                            Text(
+                                text = "Your workspace is clean with zero dummy data. Connect to your Google Antigravity remote server, create a workspace session, or send your first prompt below.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Button(
+                                    onClick = onOpenServerModal,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = accent,
+                                        contentColor = Color(0xFF070708)
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Connect Host", fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = onOpenNewSessionModal,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("New Session", color = fg)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             items(displayedMessages, key = { it.id }) { message ->
                 SessionMessageCard(
                     message = message,
@@ -434,8 +491,8 @@ fun SessionsAndChatScreen(
 
     if (showAddContextSheet) {
         AntigravityAddContextSheet(
-            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
-            activeWorkspaceName = activeSession?.workspaceName ?: "antigravity-workspace",
+            activeEndpointUrl = activeEndpointUrl,
+            activeWorkspaceName = activeSession?.workspaceName ?: "workspace",
             onAttachContext = { item ->
                 if (attachedContexts.none { it.id == item.id }) {
                     attachedContexts.add(item)
@@ -452,8 +509,8 @@ fun SessionsAndChatScreen(
 
     if (showLiveVoiceModal) {
         GeminiLiveVoiceModal(
-            activeWorkspaceName = activeSession?.workspaceName ?: "antigravity-workspace",
-            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
+            activeWorkspaceName = activeSession?.workspaceName ?: "workspace",
+            activeEndpointUrl = activeEndpointUrl,
             onDispatchPromptToAntigravity = { spokenPrompt ->
                 onSendPrompt("[Live Voice Command]: $spokenPrompt")
             },

@@ -154,6 +154,7 @@ fun ConnectionGuideScreen(
     var hostUrl by rememberSaveable(activeEndpointUrl) { mutableStateOf(activeEndpointUrl) }
     var hostToken by rememberSaveable { mutableStateOf("") }
     var quickConnectFeedback by rememberSaveable { mutableStateOf<String?>(null) }
+    var showQrScanner by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -298,12 +299,32 @@ fun ConnectionGuideScreen(
                             .padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(
-                            text = "Quick Connect: Paste Your Antigravity URL Here",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = accent
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Quick Connect",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = accent
+                            )
+                            OutlinedButton(
+                                onClick = { showQrScanner = true },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.testTag("guide_scan_qr_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.QrCodeScanner,
+                                    contentDescription = "Scan Desktop QR Code",
+                                    tint = accent,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Scan QR Code", color = accent, fontWeight = FontWeight.Bold)
+                            }
+                        }
                         OutlinedTextField(
                             value = hostLabel,
                             onValueChange = { hostLabel = it },
@@ -346,7 +367,11 @@ fun ConnectionGuideScreen(
                         ) {
                             Button(
                                 onClick = {
-                                    val cleanUrl = hostUrl.trim().ifBlank { "https://antigravity.local.tailnet.ts.net:8443" }
+                                    val cleanUrl = hostUrl.trim()
+                                    if (cleanUrl.isBlank()) {
+                                        quickConnectFeedback = "Please paste your Antigravity remote URL above first."
+                                        return@Button
+                                    }
                                     val cleanName = hostLabel.trim().ifBlank { "Antigravity Remote" }
                                     RetainedWebViewManager.reloadOrForceLoadUrl(cleanUrl, true)
                                     onQuickConnectWebBridge(cleanName, cleanUrl, hostToken.trim())
@@ -370,7 +395,11 @@ fun ConnectionGuideScreen(
 
                             OutlinedButton(
                                 onClick = {
-                                    val cleanUrl = hostUrl.trim().ifBlank { "https://antigravity.local.tailnet.ts.net:8443" }
+                                    val cleanUrl = hostUrl.trim()
+                                    if (cleanUrl.isBlank()) {
+                                        quickConnectFeedback = "Please paste your Antigravity remote URL above first."
+                                        return@OutlinedButton
+                                    }
                                     val cleanName = hostLabel.trim().ifBlank { "Antigravity Remote" }
                                     quickConnectFeedback = "Saved '$cleanName'! Opening Native Sessions..."
                                     onQuickConnectNativeSessions(cleanName, cleanUrl, hostToken.trim())
@@ -531,6 +560,19 @@ fun ConnectionGuideScreen(
                 )
             }
         }
+    }
+
+    if (showQrScanner) {
+        QrPairingScannerDialog(
+            onPairingScanned = { payload ->
+                hostLabel = payload.hostName
+                hostUrl = payload.endpointUrl
+                hostToken = payload.authToken
+                quickConnectFeedback = "Scanned QR: ${payload.hostName} (${payload.endpointUrl})"
+                showQrScanner = false
+            },
+            onDismiss = { showQrScanner = false }
+        )
     }
 }
 

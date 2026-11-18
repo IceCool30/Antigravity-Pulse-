@@ -1,6 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -18,17 +22,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -39,6 +47,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
@@ -56,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -65,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.remote.ApprovalNotificationHelper
 import com.example.ui.theme.AntigravityContrastMode
 import com.example.ui.theme.AntigravityThemeMode
 import com.example.ui.theme.AntigravityThemePreset
@@ -75,18 +86,6 @@ import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OfficialAntigravityPresets
 import com.example.ui.theme.parseHexColor
 
-/**
- * Full-screen Antigravity Remote Appearance & Theme Customizer matching the user's screenshots:
- * - Theme: System / Light / Dark icon switcher
- * - Contrast: Default / Strong pill switcher
- * - Font: Google Sans, Space Grotesk, Inter, JetBrains Mono, Fira Code, Roboto Mono
- * - Font Size ("Appears larger on mobile"): 12px .. 18px
- * - Fullscreen Mode toggle (Hide Top & Bottom Bars)
- * - Dark Theme Preset selector modal (Default Dark, Legacy Dark, Catppuccin, Dracula, Everforest,
- *   Gruvbox Material, Monokai, Nord, One Dark Pro, Tokyo Night, Solarized Dark, Vesper) + Reset button
- * - Background (#070708), Foreground (#FFFFFF), Accent (#FFC799) custom hex editors
- * - Collapsible live Code Preview (`const greet = (name: string) => ...`)
- */
 @Composable
 fun AppearanceSettingsSheet(
     settings: AppearanceSettings,
@@ -94,9 +93,17 @@ fun AppearanceSettingsSheet(
     onSelectPreset: (AntigravityThemePreset) -> Unit,
     onResetPreset: () -> Unit,
     onOpenConnectionGuide: () -> Unit,
+    onToggleAutoReconnect: (Boolean) -> Unit = {},
+    onSendTestApprovalNotification: () -> Unit = {},
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
+    val context = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        onUpdateSettings { it.copy(isApprovalNotificationsEnabled = granted) }
+    }
 
     val bg = settings.backgroundColor
     val surface = settings.surfaceColor
@@ -490,6 +497,189 @@ fun AppearanceSettingsSheet(
                 }
             }
 
+            // SECTION 1B: Security, Notifications & Bridge Resilience
+            item {
+                Text(
+                    text = "Security & Bridge Automation",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = fg,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(surface)
+                        .border(1.dp, border, RoundedCornerShape(18.dp))
+                ) {
+                    // Biometric App Lock
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Fingerprint,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Biometric App Lock",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Require fingerprint, face unlock, or device PIN when opening Antigravity Pulse",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Switch(
+                            checked = settings.isBiometricLockEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(isBiometricLockEnabled = enabled) }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = bg,
+                                checkedTrackColor = accent
+                            ),
+                            modifier = Modifier.testTag("biometric_lock_switch")
+                        )
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Background Step Approval Notifications
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.NotificationsActive,
+                                        contentDescription = null,
+                                        tint = accent,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Approval Notifications",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = fg
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Approve & Run or Reject queued agent steps directly from the notification shade",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = secondaryFg
+                                )
+                            }
+                            Switch(
+                                checked = settings.isApprovalNotificationsEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        !ApprovalNotificationHelper.hasNotificationPermission(context)
+                                    ) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        onUpdateSettings { it.copy(isApprovalNotificationsEnabled = enabled) }
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = bg,
+                                    checkedTrackColor = accent
+                                ),
+                                modifier = Modifier.testTag("approval_notifications_switch")
+                            )
+                        }
+
+                        if (settings.isApprovalNotificationsEnabled) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        !ApprovalNotificationHelper.hasNotificationPermission(context)
+                                    ) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        onSendTestApprovalNotification()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("send_test_approval_notification_button")
+                            ) {
+                                Text("Send Test Step Approval Notification", color = accent)
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // WebSocket Auto-Reconnect & Offline Command Queue
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Autorenew,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Auto-Reconnect & Offline Queue",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Automatically reconnect (2s→30s backoff) & flush queued commands on Wi-Fi/5G switches",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Switch(
+                            checked = settings.isAutoReconnectEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(isAutoReconnectEnabled = enabled) }
+                                onToggleAutoReconnect(enabled)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = bg,
+                                checkedTrackColor = accent
+                            ),
+                            modifier = Modifier.testTag("auto_reconnect_switch")
+                        )
+                    }
+                }
+            }
+
             // SECTION 2: Dark Theme / Preset & Color Customizer (Matching Screenshot 3 & 4)
             item {
                 Text(
@@ -813,7 +1003,11 @@ fun AppearanceSettingsSheet(
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedTextField(
                         value = hexInput,
-                        onValueChange = { hexInput = it.uppercase().take(6) },
+                        onValueChange = { raw ->
+                            hexInput = raw.uppercase()
+                                .filter { c -> c in '0'..'9' || c in 'A'..'F' }
+                                .take(6)
+                        },
                         label = { Text("Hex Color (#RRGGBB)") },
                         prefix = { Text("# ") },
                         singleLine = true,
@@ -826,11 +1020,11 @@ fun AppearanceSettingsSheet(
                         color = secondaryFg
                     )
 
-                    Row(
+                    LazyRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        quickSwatches.forEach { swatchHex ->
+                        items(quickSwatches) { swatchHex ->
                             val swatchColor = parseHexColor(swatchHex, accent)
                             Box(
                                 modifier = Modifier
@@ -849,7 +1043,11 @@ fun AppearanceSettingsSheet(
             confirmButton = {
                 Button(
                     onClick = {
-                        val formatted = "#${hexInput.trim().removePrefix("#").padEnd(6, '0').take(6)}"
+                        val safeHex = hexInput.uppercase()
+                            .filter { c -> c in '0'..'9' || c in 'A'..'F' }
+                            .padEnd(6, '0')
+                            .take(6)
+                        val formatted = "#$safeHex"
                         onUpdateSettings { current ->
                             when (fieldName) {
                                 "Background" -> current.copy(backgroundHex = formatted)

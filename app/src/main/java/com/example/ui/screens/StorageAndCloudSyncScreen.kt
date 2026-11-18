@@ -16,11 +16,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -76,7 +76,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 fun StorageAndCloudSyncScreen(
     dao: AntigravityDao,
     localProfiles: List<ServerProfileEntity>,
-    localSessions: List<AgentSessionEntity>
+    localSessions: List<AgentSessionEntity>,
+    onClearLocalData: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val appearance = LocalAppearanceSettings.current
@@ -95,6 +96,7 @@ fun StorageAndCloudSyncScreen(
 
     var authError by remember { mutableStateOf<String?>(null) }
     var isSigningIn by remember { mutableStateOf(false) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (currentUser == null) {
@@ -106,6 +108,46 @@ fun StorageAndCloudSyncScreen(
                 scope = scope
             )
         }
+    }
+
+    if (showClearConfirmDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showClearConfirmDialog = false },
+            containerColor = surface,
+            title = {
+                Text(
+                    text = "Clear Local Workspace Data?",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = fg
+                )
+            },
+            text = {
+                Text(
+                    text = "This removes all locally cached server profiles, sessions, messages, file diffs, and terminal logs from this device. Your Google Cloud backups remain untouched.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = secondaryFg
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onClearLocalData()
+                        showClearConfirmDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CrimsonError,
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Clear All", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("Cancel", color = secondaryFg)
+                }
+            }
+        )
     }
 
     LazyColumn(
@@ -153,6 +195,15 @@ fun StorageAndCloudSyncScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = secondaryFg
                     )
+                    if (localProfiles.isNotEmpty() || localSessions.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = { showClearConfirmDialog = true },
+                            modifier = Modifier.testTag("clear_local_cache_button")
+                        ) {
+                            Text("Reset Local Workspace Data", color = CrimsonError)
+                        }
+                    }
                 }
             }
         }
@@ -338,7 +389,7 @@ private fun AuthenticatedCloudSyncPanel(
                     modifier = Modifier.testTag("google_sign_out_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Logout,
+                        imageVector = Icons.AutoMirrored.Filled.Logout,
                         contentDescription = "Sign Out",
                         modifier = Modifier.size(15.dp)
                     )
@@ -442,7 +493,7 @@ private fun AuthenticatedCloudSyncPanel(
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
-                                text = "${cp.lastLatencyMs}ms",
+                                text = if (cp.lastLatencyMs > 0) "${cp.lastLatencyMs}ms" else "Saved",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = EmeraldOnline
                             )

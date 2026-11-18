@@ -1,10 +1,11 @@
 package com.example
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -16,10 +17,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,20 +31,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -56,12 +68,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -82,19 +100,25 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.cloud.configureAppCheck
 import com.example.data.local.AgentSessionEntity
 import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
+import com.example.data.remote.ApprovalNotificationHelper
 import com.example.ui.screens.AppearanceSettingsSheet
 import com.example.ui.screens.CodeDiffAndTerminalScreen
 import com.example.ui.screens.ConnectionGuideScreen
 import com.example.ui.screens.CopilotAndImageStudioScreen
+import com.example.ui.screens.GeminiLiveVoiceModal
+import com.example.ui.screens.QrPairingScannerDialog
 import com.example.ui.screens.RetainedWebViewBridgeScreen
 import com.example.ui.screens.SessionsAndChatScreen
 import com.example.ui.screens.StorageAndCloudSyncScreen
@@ -108,7 +132,7 @@ import com.example.ui.theme.NeuralViolet
 import com.example.viewmodel.AntigravityViewModel
 import com.example.viewmodel.CopilotViewModel
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -121,14 +145,184 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
             val appearanceManager = remember { AppearancePreferencesManager(context) }
             val appearance by appearanceManager.settings.collectAsStateWithLifecycle()
+            var isBiometricUnlocked by rememberSaveable { mutableStateOf(!appearance.isBiometricLockEnabled) }
 
             AntigravityPulseTheme(appearance = appearance) {
-                AntigravityPulseApp(
-                    appearance = appearance,
-                    onUpdateAppearance = appearanceManager::update,
-                    onSelectPreset = appearanceManager::applyPreset,
-                    onResetPreset = appearanceManager::resetCurrentPresetColors
+                if (appearance.isBiometricLockEnabled && !isBiometricUnlocked) {
+                    BiometricLockGateScreen(
+                        activity = this@MainActivity,
+                        appearance = appearance,
+                        onUnlocked = { isBiometricUnlocked = true }
+                    )
+                } else {
+                    AntigravityPulseApp(
+                        appearance = appearance,
+                        onUpdateAppearance = appearanceManager::update,
+                        onSelectPreset = appearanceManager::applyPreset,
+                        onResetPreset = appearanceManager::resetCurrentPresetColors
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BiometricLockGateScreen(
+    activity: FragmentActivity,
+    appearance: AppearanceSettings,
+    onUnlocked: () -> Unit
+) {
+    val bg = appearance.backgroundColor
+    val surface = appearance.surfaceColor
+    val border = appearance.borderColor
+    val fg = appearance.foregroundColor
+    val secondaryFg = appearance.secondaryTextColor
+    val accent = appearance.accentColor
+
+    var authError by remember { mutableStateOf<String?>(null) }
+
+    val biometricManager = remember { BiometricManager.from(activity) }
+    val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+        BiometricManager.Authenticators.DEVICE_CREDENTIAL
+    val canAuthenticateStatus = remember { biometricManager.canAuthenticate(authenticators) }
+
+    fun launchBiometricPrompt() {
+        authError = null
+        if (canAuthenticateStatus != BiometricManager.BIOMETRIC_SUCCESS) {
+            authError = "No fingerprint, face unlock, or screen lock is enrolled on this device."
+            return
+        }
+        val executor = ContextCompat.getMainExecutor(activity)
+        val prompt = BiometricPrompt(
+            activity,
+            executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    super.onAuthenticationSucceeded(result)
+                    onUnlocked()
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    super.onAuthenticationError(errorCode, errString)
+                    authError = errString.toString()
+                }
+
+                override fun onAuthenticationFailed() {
+                    super.onAuthenticationFailed()
+                    authError = "Biometric verification did not match. Please try again."
+                }
+            }
+        )
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Unlock Antigravity Pulse")
+            .setSubtitle("Verify your identity to access your remote workspaces & pairing tokens")
+            .setAllowedAuthenticators(authenticators)
+            .build()
+        prompt.authenticate(promptInfo)
+    }
+
+    LaunchedEffect(Unit) {
+        if (canAuthenticateStatus == BiometricManager.BIOMETRIC_SUCCESS) {
+            launchBiometricPrompt()
+        }
+    }
+
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bg),
+        contentWindowInsets = WindowInsets.safeDrawing
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .background(bg)
+                .padding(24.dp)
+                .testTag("biometric_lock_screen"),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(surface)
+                    .border(1.dp, border, RoundedCornerShape(20.dp))
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.16f))
+                        .border(1.5.dp, accent.copy(alpha = 0.55f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Fingerprint,
+                        contentDescription = "Biometric Lock",
+                        tint = accent,
+                        modifier = Modifier.size(34.dp)
+                    )
+                }
+
+                Text(
+                    text = "Antigravity Pulse Locked",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = fg
                 )
+                Text(
+                    text = "Your remote bridge endpoints, pairing tokens, and workspace sessions are protected by Biometric App Lock.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = secondaryFg,
+                    textAlign = TextAlign.Center
+                )
+
+                if (authError != null) {
+                    Text(
+                        text = authError.orEmpty(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = accent,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Button(
+                    onClick = { launchBiometricPrompt() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = accent,
+                        contentColor = Color(0xFF070708)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("biometric_unlock_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Unlock with Biometrics / PIN", fontWeight = FontWeight.Bold)
+                }
+
+                if (canAuthenticateStatus != BiometricManager.BIOMETRIC_SUCCESS) {
+                    OutlinedButton(
+                        onClick = onUnlocked,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("biometric_fallback_continue_button")
+                    ) {
+                        Text("Continue (No Device Lock Configured)", color = secondaryFg)
+                    }
+                }
             }
         }
     }
@@ -171,6 +365,13 @@ fun AntigravityPulseApp(
     val activeTerminalLogs by antigravityViewModel.activeTerminalLogs.collectAsStateWithLifecycle()
     val telemetry by antigravityViewModel.bridgeTelemetry.collectAsStateWithLifecycle()
     val statusBanner by antigravityViewModel.statusBanner.collectAsStateWithLifecycle()
+    val isExecutingCommand by antigravityViewModel.isExecutingCommand.collectAsStateWithLifecycle()
+    val remoteBrowsePath by antigravityViewModel.remoteBrowsePath.collectAsStateWithLifecycle()
+    val remoteFileEntries by antigravityViewModel.remoteFileEntries.collectAsStateWithLifecycle()
+    val previewFilePath by antigravityViewModel.previewFilePath.collectAsStateWithLifecycle()
+    val previewFileContent by antigravityViewModel.previewFileContent.collectAsStateWithLifecycle()
+    val isLoadingRemoteFiles by antigravityViewModel.isLoadingRemoteFiles.collectAsStateWithLifecycle()
+    val remoteFileError by antigravityViewModel.remoteFileError.collectAsStateWithLifecycle()
 
     val copilotMessages by copilotViewModel.messages.collectAsStateWithLifecycle()
     val selectedModel by copilotViewModel.selectedModel.collectAsStateWithLifecycle()
@@ -188,6 +389,39 @@ fun AntigravityPulseApp(
     var showServerModal by rememberSaveable { mutableStateOf(false) }
     var showNewSessionModal by rememberSaveable { mutableStateOf(false) }
     var showBridgeExplainerModal by rememberSaveable { mutableStateOf(false) }
+    var showGlobalQrScanner by rememberSaveable { mutableStateOf(false) }
+    var showGlobalLiveVoice by rememberSaveable { mutableStateOf(false) }
+
+    val activeSession = sessions.firstOrNull { it.id == selectedSessionId } ?: sessions.firstOrNull()
+    val pendingApprovalMessage = activeMessages.lastOrNull {
+        it.senderRole == "TOOL_APPROVAL" && it.approvalStatus == "PENDING"
+    }
+
+    // Keep auto-reconnect policy synced with persisted settings
+    LaunchedEffect(appearance.isAutoReconnectEnabled) {
+        antigravityViewModel.setAutoReconnectEnabled(appearance.isAutoReconnectEnabled)
+    }
+
+    // Post actionable Android notifications whenever a step approval arrives while enabled
+    LaunchedEffect(appearance.isApprovalNotificationsEnabled) {
+        antigravityViewModel.pendingApprovalNotificationEvents.collect { approvalMsg ->
+            if (appearance.isApprovalNotificationsEnabled) {
+                val workspace = sessions.firstOrNull { it.id == approvalMsg.sessionId }?.workspaceName
+                    ?: "Remote Workspace"
+                val posted = ApprovalNotificationHelper.showStepApprovalNotification(
+                    context = context,
+                    messageId = approvalMsg.id,
+                    workspaceName = workspace,
+                    command = approvalMsg.commandOrPath
+                )
+                if (!posted) {
+                    antigravityViewModel.recordWebViewBridgeEvent(
+                        "Enable Notification permission in Settings to approve steps from the shade."
+                    )
+                }
+            }
+        }
+    }
 
     val activeTheme = LocalAppearanceSettings.current
     val bg = activeTheme.backgroundColor
@@ -280,6 +514,8 @@ fun AntigravityPulseApp(
                         showAppearanceSheet = false
                         showConnectionGuide = true
                     },
+                    onToggleAutoReconnect = antigravityViewModel::setAutoReconnectEnabled,
+                    onSendTestApprovalNotification = antigravityViewModel::triggerTestApprovalNotification,
                     onClose = { showAppearanceSheet = false }
                 )
             }
@@ -287,11 +523,18 @@ fun AntigravityPulseApp(
         return
     }
 
-    Scaffold(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(bg),
-        contentWindowInsets = WindowInsets.safeDrawing,
+            .background(bg)
+    ) {
+        val isWideScreen = maxWidth >= 720.dp
+
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(bg),
+            contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             // Collapsible Sleek Antigravity Remote Top Bar (Hidden in Distraction-Free Fullscreen Mode)
             AnimatedVisibility(
@@ -358,9 +601,9 @@ fun AntigravityPulseApp(
             }
         },
         bottomBar = {
-            // Collapsible Bottom Navigation Bar (Hidden in Distraction-Free Fullscreen Mode)
+            // Compact portrait/handheld Bottom Navigation Bar (replaced by NavigationRail on wide/foldable screens)
             AnimatedVisibility(
-                visible = !isBarsHidden,
+                visible = !isBarsHidden && !isWideScreen,
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
@@ -403,61 +646,97 @@ fun AntigravityPulseApp(
             }
         }
     ) { innerPadding ->
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .background(bg)
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                if (statusBanner != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(EmeraldOnline.copy(alpha = 0.16f))
-                            .clickable { antigravityViewModel.clearBanner() }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                            .testTag("status_feedback_banner"),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = statusBanner.orEmpty(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = EmeraldOnline,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            text = "Dismiss",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = fg
+            // Wide / Foldable / Landscape Side NavigationRail
+            if (isWideScreen && !isBarsHidden) {
+                NavigationRail(
+                    containerColor = surface,
+                    modifier = Modifier.testTag("adaptive_navigation_rail")
+                ) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    PulseTab.entries.forEachIndexed { index, tab ->
+                        NavigationRailItem(
+                            selected = selectedTabIndex == index,
+                            onClick = { selectedTabIndex = index },
+                            icon = {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = stringResource(id = tab.titleRes)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(id = tab.titleRes),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1
+                                )
+                            },
+                            colors = NavigationRailItemDefaults.colors(
+                                selectedIconColor = accent,
+                                selectedTextColor = accent,
+                                indicatorColor = accent.copy(alpha = 0.16f),
+                                unselectedIconColor = secondaryFg,
+                                unselectedTextColor = secondaryFg
+                            ),
+                            modifier = Modifier.testTag("${tab.tag}_rail")
                         )
                     }
                 }
+                VerticalDivider(color = border, thickness = 1.dp)
+            }
 
-                Box(modifier = Modifier.weight(1f)) {
-                    when (PulseTab.entries[selectedTabIndex]) {
-                        PulseTab.SESSIONS -> SessionsAndChatScreen(
-                            sessions = sessions,
-                            selectedSessionId = selectedSessionId,
-                            messages = activeMessages,
-                            isFullscreenBarsHidden = isBarsHidden,
-                            searchQuery = searchQuery,
-                            onClearSearch = { searchQuery = "" },
-                            onSelectSession = antigravityViewModel::selectSession,
-                            onOpenNewSessionModal = { showNewSessionModal = true },
-                            onSendPrompt = { prompt ->
-                                antigravityViewModel.sendPromptToAntigravityAgent(prompt)
-                            },
-                            onResolveApproval = antigravityViewModel::resolveStepApproval,
-                            onUpdateDraft = antigravityViewModel::updateDraftAndScroll
-                        )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .background(bg)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (statusBanner != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(EmeraldOnline.copy(alpha = 0.16f))
+                                .clickable { antigravityViewModel.clearBanner() }
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .testTag("status_feedback_banner"),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = statusBanner.orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = EmeraldOnline,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "Dismiss",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = fg
+                            )
+                        }
+                    }
 
-                        PulseTab.WORKSPACE -> CodeDiffAndTerminalScreen(
+                    val workspacePane: @Composable () -> Unit = {
+                        CodeDiffAndTerminalScreen(
                             diffs = activeDiffs,
                             terminalLogs = activeTerminalLogs,
+                            telemetry = telemetry,
+                            isExecutingCommand = isExecutingCommand,
+                            savedMacros = appearance.savedTerminalMacros,
+                            remoteBrowsePath = remoteBrowsePath,
+                            remoteFileEntries = remoteFileEntries,
+                            previewFilePath = previewFilePath,
+                            previewFileContent = previewFileContent,
+                            isLoadingRemoteFiles = isLoadingRemoteFiles,
+                            remoteFileError = remoteFileError,
                             onAcceptDiff = { diff ->
                                 antigravityViewModel.updateFileDiffDecision(diff, true)
                             },
@@ -465,216 +744,421 @@ fun AntigravityPulseApp(
                                 antigravityViewModel.updateFileDiffDecision(diff, false)
                             },
                             onRunCommand = antigravityViewModel::runNativeTerminalCommand,
-                            onClearTerminal = antigravityViewModel::clearTerminalForActiveSession
-                        )
-
-                        PulseTab.WEB_BRIDGE -> RetainedWebViewBridgeScreen(
-                            telemetry = telemetry,
-                            isFullscreenBarsHidden = isBarsHidden,
-                            onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
-                            onJsBridgeEvent = antigravityViewModel::recordWebViewBridgeEvent
-                        )
-
-                        PulseTab.COPILOT -> CopilotAndImageStudioScreen(
-                            messages = copilotMessages,
-                            selectedModel = selectedModel,
-                            selectedPersona = selectedPersona,
-                            chatUiState = chatUiState,
-                            imageUiState = imageUiState,
-                            selectedInputBitmap = selectedInputBitmap,
-                            onSelectModel = copilotViewModel::selectModel,
-                            onSelectPersona = copilotViewModel::selectPersona,
-                            onSendChatMessage = copilotViewModel::sendChatMessage,
-                            onForwardToAntigravityAgent = { refinedPrompt ->
-                                antigravityViewModel.sendPromptToAntigravityAgent(refinedPrompt)
-                                selectedTabIndex = 0
+                            onSendCtrlC = antigravityViewModel::sendTerminalCtrlC,
+                            onClearTerminal = antigravityViewModel::clearTerminalForActiveSession,
+                            onOpenServerConfig = { showServerModal = true },
+                            onSaveMacro = { macro ->
+                                onUpdateAppearance { cur ->
+                                    cur.copy(savedTerminalMacros = (cur.savedTerminalMacros + macro).distinct())
+                                }
                             },
-                            onSetInputBitmap = copilotViewModel::setInputBitmapForEditing,
-                            onGenerateOrEditImage = copilotViewModel::generateOrEditUiAsset
-                        )
-
-                        PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
-                            dao = dao,
-                            localProfiles = serverProfiles,
-                            localSessions = sessions
+                            onDeleteMacro = { macro ->
+                                onUpdateAppearance { cur ->
+                                    cur.copy(savedTerminalMacros = cur.savedTerminalMacros.filterNot { it == macro })
+                                }
+                            },
+                            onDebugErrorWithCopilot = { failedCmd, output ->
+                                val debugPrompt = "Debug and fix this failing remote shell command:\n\nCommand:\n```bash\n$failedCmd\n```\n\nOutput:\n```\n${output.take(2500)}\n```\n\nExplain the root cause concisely and provide the exact fix command or code patch."
+                                selectedTabIndex = PulseTab.COPILOT.ordinal
+                                copilotViewModel.sendChatMessage(debugPrompt)
+                            },
+                            onBrowseRemotePath = antigravityViewModel::browseRemoteDirectory,
+                            onReadRemoteFile = antigravityViewModel::openRemoteFile,
+                            onCloseRemoteFilePreview = antigravityViewModel::closeRemoteFilePreview,
+                            onAttachRemoteFileToPrompt = { filePath, snippet ->
+                                val attachedPrompt = if (snippet.isNotBlank()) {
+                                    "Attached remote file `$filePath`:\n```\n$snippet\n```\nPlease review this file and advise on next steps."
+                                } else {
+                                    "Attached remote file reference: @$filePath"
+                                }
+                                antigravityViewModel.sendPromptToAntigravityAgent(attachedPrompt)
+                                if (!isWideScreen) {
+                                    selectedTabIndex = PulseTab.SESSIONS.ordinal
+                                }
+                            }
                         )
                     }
-                }
-            }
 
-            // Floating Edge Handle & Summonable Overlay Dock when Top & Bottom Bars are hidden!
-            if (isBarsHidden) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 0.dp)
-                ) {
-                    if (!showFloatingQuickMenu) {
-                        // Subtle edge pill matching Screenshot 3's left-edge floating handle
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
-                                .background(elevated.copy(alpha = 0.88f))
-                                .border(
-                                    1.dp,
-                                    border,
-                                    RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)
-                                )
-                                .clickable { showFloatingQuickMenu = true }
-                                .padding(horizontal = 8.dp, vertical = 14.dp)
-                                .testTag("floating_fullscreen_edge_handle"),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                contentDescription = "Open Quick Controls or Restore Bars",
-                                tint = accent,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    } else {
-                        // Floating Quick Control Overlay Drawer
-                        Column(
-                            modifier = Modifier
-                                .padding(start = 8.dp)
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(surface.copy(alpha = 0.96f))
-                                .border(1.dp, border, RoundedCornerShape(20.dp))
-                                .padding(10.dp)
-                                .testTag("floating_quick_menu_overlay"),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            // Restore Bars button
+                    val sessionsPane: @Composable () -> Unit = {
+                        SessionsAndChatScreen(
+                            sessions = sessions,
+                            selectedSessionId = selectedSessionId,
+                            messages = activeMessages,
+                            activeEndpointUrl = telemetry.activeEndpoint,
+                            isFullscreenBarsHidden = isBarsHidden,
+                            searchQuery = searchQuery,
+                            onClearSearch = { searchQuery = "" },
+                            onSelectSession = antigravityViewModel::selectSession,
+                            onOpenNewSessionModal = { showNewSessionModal = true },
+                            onOpenServerModal = { showServerModal = true },
+                            onSendPrompt = { prompt ->
+                                antigravityViewModel.sendPromptToAntigravityAgent(prompt)
+                            },
+                            onResolveApproval = antigravityViewModel::resolveStepApproval,
+                            onUpdateDraft = antigravityViewModel::updateDraftAndScroll
+                        )
+                    }
+
+                    Box(modifier = Modifier.weight(1f)) {
+                        val activeTab = PulseTab.entries[selectedTabIndex]
+                        if (isWideScreen && (activeTab == PulseTab.SESSIONS || activeTab == PulseTab.WORKSPACE)) {
+                            // Landscape / Foldable Adaptive Two-Pane Split-View (Sessions + Shell/Diffs/Files)
                             Row(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(accent)
-                                    .clickable {
-                                        showFloatingQuickMenu = false
-                                        onUpdateAppearance { it.copy(isFullscreenBarsHidden = false) }
-                                    }
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                                    .testTag("restore_bars_button"),
+                                    .fillMaxSize()
+                                    .testTag("adaptive_split_workspace")
+                            ) {
+                                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                    sessionsPane()
+                                }
+                                VerticalDivider(color = border, thickness = 1.dp)
+                                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                    workspacePane()
+                                }
+                            }
+                        } else {
+                            when (activeTab) {
+                                PulseTab.SESSIONS -> sessionsPane()
+                                PulseTab.WORKSPACE -> workspacePane()
+                                PulseTab.WEB_BRIDGE -> RetainedWebViewBridgeScreen(
+                                    telemetry = telemetry,
+                                    isFullscreenBarsHidden = isBarsHidden,
+                                    onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                    onJsBridgeEvent = antigravityViewModel::recordWebViewBridgeEvent
+                                )
+
+                                PulseTab.COPILOT -> CopilotAndImageStudioScreen(
+                                    messages = copilotMessages,
+                                    activeEndpointUrl = telemetry.activeEndpoint,
+                                    selectedModel = selectedModel,
+                                    selectedPersona = selectedPersona,
+                                    chatUiState = chatUiState,
+                                    imageUiState = imageUiState,
+                                    selectedInputBitmap = selectedInputBitmap,
+                                    onSelectModel = copilotViewModel::selectModel,
+                                    onSelectPersona = copilotViewModel::selectPersona,
+                                    onSendChatMessage = copilotViewModel::sendChatMessage,
+                                    onForwardToAntigravityAgent = { refinedPrompt ->
+                                        antigravityViewModel.sendPromptToAntigravityAgent(refinedPrompt)
+                                        selectedTabIndex = 0
+                                    },
+                                    onSetInputBitmap = copilotViewModel::setInputBitmapForEditing,
+                                    onGenerateOrEditImage = copilotViewModel::generateOrEditUiAsset
+                                )
+
+                                PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
+                                    dao = dao,
+                                    localProfiles = serverProfiles,
+                                    localSessions = sessions,
+                                    onClearLocalData = antigravityViewModel::clearAllLocalWorkspaceData
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Floating Edge Handle & Summonable Overlay Dock when Top & Bottom Bars are hidden!
+                if (isBarsHidden) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 0.dp)
+                    ) {
+                        if (!showFloatingQuickMenu) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp))
+                                    .background(elevated.copy(alpha = 0.88f))
+                                    .border(
+                                        1.dp,
+                                        border,
+                                        RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)
+                                    )
+                                    .clickable { showFloatingQuickMenu = true }
+                                    .padding(horizontal = 8.dp, vertical = 14.dp)
+                                    .testTag("floating_fullscreen_edge_handle"),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.FullscreenExit,
-                                    contentDescription = "Show Top & Bottom Bars",
-                                    tint = Color(0xFF070708),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Show Bars",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF070708)
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = "Open Quick Controls or Restore Bars",
+                                    tint = accent,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
-
-                            // Quick Tab Switcher inside Fullscreen Mode
-                            PulseTab.entries.forEachIndexed { index, tab ->
-                                val isSelected = selectedTabIndex == index
+                        } else {
+                            // Floating Quick Control Overlay Drawer with Power-User Quick Actions
+                            Column(
+                                modifier = Modifier
+                                    .padding(start = 8.dp, top = 8.dp, bottom = 8.dp)
+                                    .verticalScroll(rememberScrollState())
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(surface.copy(alpha = 0.97f))
+                                    .border(1.dp, border, RoundedCornerShape(20.dp))
+                                    .padding(10.dp)
+                                    .testTag("floating_quick_menu_overlay"),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                // Restore Bars button
                                 Row(
                                     modifier = Modifier
-                                        .width(148.dp)
+                                        .width(164.dp)
                                         .clip(RoundedCornerShape(12.dp))
-                                        .background(
-                                            if (isSelected) accent.copy(alpha = 0.18f)
-                                            else Color.Transparent
-                                        )
+                                        .background(accent)
                                         .clickable {
-                                            selectedTabIndex = index
                                             showFloatingQuickMenu = false
+                                            onUpdateAppearance { it.copy(isFullscreenBarsHidden = false) }
                                         }
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        .testTag("restore_bars_button"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.FullscreenExit,
+                                        contentDescription = "Show Top & Bottom Bars",
+                                        tint = Color(0xFF070708),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Show Bars",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF070708)
+                                    )
+                                }
+
+                                // Power Quick Action: Approve Pending Step (when queued)
+                                if (pendingApprovalMessage != null) {
+                                    Row(
+                                        modifier = Modifier
+                                            .width(164.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(EmeraldOnline.copy(alpha = 0.2f))
+                                            .border(1.dp, EmeraldOnline, RoundedCornerShape(12.dp))
+                                            .clickable {
+                                                antigravityViewModel.resolveStepApproval(pendingApprovalMessage, true)
+                                                showFloatingQuickMenu = false
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                                            .testTag("floating_quick_approve_step"),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Approve Pending Step",
+                                            tint = EmeraldOnline,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Approve Step",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = EmeraldOnline
+                                        )
+                                    }
+                                }
+
+                                // Power Quick Action: Live Voice (gemini-3.8-live)
+                                Row(
+                                    modifier = Modifier
+                                        .width(164.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(elevated)
+                                        .clickable {
+                                            showFloatingQuickMenu = false
+                                            showGlobalLiveVoice = true
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                                        .testTag("floating_quick_live_voice"),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = null,
-                                        tint = if (isSelected) accent else secondaryFg,
+                                        imageVector = Icons.Default.GraphicEq,
+                                        contentDescription = "Live Voice Copilot",
+                                        tint = accent,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = stringResource(id = tab.titleRes),
+                                        text = "Live Voice",
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = if (isSelected) accent else fg
+                                        color = fg
                                     )
                                 }
-                            }
 
-                            HorizontalDivider(
-                                color = border,
-                                modifier = Modifier.width(136.dp)
-                            )
+                                // Power Quick Action: Scan QR Pair
+                                Row(
+                                    modifier = Modifier
+                                        .width(164.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(elevated)
+                                        .clickable {
+                                            showFloatingQuickMenu = false
+                                            showGlobalQrScanner = true
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                                        .testTag("floating_quick_scan_qr"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.QrCodeScanner,
+                                        contentDescription = "Scan QR Pair",
+                                        tint = accent,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Scan QR Pair",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = fg
+                                    )
+                                }
 
-                            // Quick Appearance Customizer button
-                            Row(
-                                modifier = Modifier
-                                    .width(148.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable {
-                                        showFloatingQuickMenu = false
-                                        showAppearanceSheet = true
+                                // Power Quick Action: Run Last Shell Command (when available)
+                                val lastCmd = activeTerminalLogs.lastOrNull()?.command
+                                if (!lastCmd.isNullOrBlank()) {
+                                    Row(
+                                        modifier = Modifier
+                                            .width(164.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(elevated)
+                                            .clickable {
+                                                antigravityViewModel.runNativeTerminalCommand(lastCmd)
+                                                showFloatingQuickMenu = false
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                                            .testTag("floating_quick_rerun_last_cmd"),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = "Run Last Command",
+                                            tint = EmeraldOnline,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "Re-run: ${lastCmd.take(11)}",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = fg,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = "Appearance Settings",
-                                    tint = secondaryFg,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Appearance",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = fg
-                                )
-                            }
+                                }
 
-                            // Quick Connection Guide button
-                            Row(
-                                modifier = Modifier
-                                    .width(148.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable {
-                                        showFloatingQuickMenu = false
-                                        showConnectionGuide = true
+                                HorizontalDivider(
+                                    color = border,
+                                    modifier = Modifier.width(150.dp)
+                                )
+
+                                // Quick Tab Switcher inside Fullscreen Mode
+                                PulseTab.entries.forEachIndexed { index, tab ->
+                                    val isSelected = selectedTabIndex == index
+                                    Row(
+                                        modifier = Modifier
+                                            .width(164.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                if (isSelected) accent.copy(alpha = 0.18f)
+                                                else Color.Transparent
+                                            )
+                                            .clickable {
+                                                selectedTabIndex = index
+                                                showFloatingQuickMenu = false
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = tab.icon,
+                                            contentDescription = null,
+                                            tint = if (isSelected) accent else secondaryFg,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = stringResource(id = tab.titleRes),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (isSelected) accent else fg
+                                        )
                                     }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.HelpOutline,
-                                    contentDescription = "How to Connect Guide",
-                                    tint = accent,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "How to Use Guide",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = accent
-                                )
-                            }
+                                }
 
-                            // Collapse Drawer back to Edge Pill
-                            TextButton(
-                                onClick = { showFloatingQuickMenu = false }
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                                    contentDescription = "Hide Menu",
-                                    tint = secondaryFg,
-                                    modifier = Modifier.size(16.dp)
+                                HorizontalDivider(
+                                    color = border,
+                                    modifier = Modifier.width(150.dp)
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Keep Fullscreen", color = secondaryFg)
+
+                                // Quick Appearance Customizer button
+                                Row(
+                                    modifier = Modifier
+                                        .width(164.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            showFloatingQuickMenu = false
+                                            showAppearanceSheet = true
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = "Appearance Settings",
+                                        tint = secondaryFg,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Settings",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = fg
+                                    )
+                                }
+
+                                // Quick Connection Guide button
+                                Row(
+                                    modifier = Modifier
+                                        .width(164.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            showFloatingQuickMenu = false
+                                            showConnectionGuide = true
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.HelpOutline,
+                                        contentDescription = "How to Connect Guide",
+                                        tint = accent,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "How to Use Guide",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = accent
+                                    )
+                                }
+
+                                // Collapse Drawer back to Edge Pill
+                                TextButton(
+                                    onClick = { showFloatingQuickMenu = false }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                        contentDescription = "Hide Menu",
+                                        tint = secondaryFg,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Keep Fullscreen", color = secondaryFg)
+                                }
                             }
                         }
                     }
@@ -682,26 +1166,51 @@ fun AntigravityPulseApp(
             }
         }
     }
+    }
 
-    // Modal: Server Profile Switcher & Host Connection Editor
+    // Modal: Server Profile Switcher & Host Connection Editor (with Built-In QR Scanner)
     if (showServerModal) {
         var hostName by remember { mutableStateOf("") }
         var hostUrl by remember { mutableStateOf("https://") }
         var hostToken by remember { mutableStateOf("") }
         var keepAlive by remember { mutableStateOf(true) }
+        var showModalQrScanner by remember { mutableStateOf(false) }
 
         AlertDialog(
             onDismissRequest = { showServerModal = false },
             containerColor = surface,
             title = {
-                Text(
-                    "Antigravity Remote Endpoints",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = fg
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Remote Endpoints",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = fg
+                    )
+                    OutlinedButton(
+                        onClick = { showModalQrScanner = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("server_modal_scan_qr_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = "Scan QR Code",
+                            tint = accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Scan QR", color = accent, fontWeight = FontWeight.Bold)
+                    }
+                }
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Text(
                         "Select an existing bridge profile or add your Tailscale / Cloudflare / LAN language_server URL:",
                         style = MaterialTheme.typography.bodyMedium,
@@ -739,7 +1248,7 @@ fun AntigravityPulseApp(
                                 )
                             }
                             Text(
-                                text = "${profile.lastLatencyMs}ms",
+                                text = if (profile.lastLatencyMs > 0) "${profile.lastLatencyMs}ms" else "Saved",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = EmeraldOnline
                             )
@@ -790,10 +1299,10 @@ fun AntigravityPulseApp(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (hostName.isNotBlank() && hostUrl.isNotBlank()) {
+                        if (hostUrl.isNotBlank()) {
                             antigravityViewModel.addOrUpdateServerProfile(
                                 null,
-                                hostName,
+                                hostName.ifBlank { "Antigravity Remote" },
                                 hostUrl,
                                 "HYBRID_BRIDGE",
                                 hostToken,
@@ -815,6 +1324,52 @@ fun AntigravityPulseApp(
                     Text("Close", color = secondaryFg)
                 }
             }
+        )
+
+        if (showModalQrScanner) {
+            QrPairingScannerDialog(
+                onPairingScanned = { payload ->
+                    hostName = payload.hostName
+                    hostUrl = payload.endpointUrl
+                    hostToken = payload.authToken
+                    showModalQrScanner = false
+                },
+                onDismiss = { showModalQrScanner = false }
+            )
+        }
+    }
+
+    // Global QR Scanner triggered from Fullscreen Quick Menu
+    if (showGlobalQrScanner) {
+        QrPairingScannerDialog(
+            onPairingScanned = { payload ->
+                antigravityViewModel.addOrUpdateServerProfile(
+                    existingId = null,
+                    name = payload.hostName,
+                    endpointUrl = payload.endpointUrl,
+                    connectionMode = "HYBRID_BRIDGE",
+                    authToken = payload.authToken,
+                    keepAlivePinned = true
+                )
+                showGlobalQrScanner = false
+            },
+            onDismiss = { showGlobalQrScanner = false }
+        )
+    }
+
+    // Global Gemini Live Voice triggered from Fullscreen Quick Menu
+    if (showGlobalLiveVoice) {
+        GeminiLiveVoiceModal(
+            activeWorkspaceName = activeSession?.workspaceName ?: "Remote Workspace",
+            activeEndpointUrl = telemetry.activeEndpoint,
+            onDispatchPromptToAntigravity = { prompt ->
+                antigravityViewModel.sendPromptToAntigravityAgent(prompt)
+                showGlobalLiveVoice = false
+            },
+            onRunRemoteTerminalCommand = { cmd ->
+                antigravityViewModel.runNativeTerminalCommand(cmd)
+            },
+            onDismiss = { showGlobalLiveVoice = false }
         )
     }
 
@@ -1013,8 +1568,7 @@ private fun AntigravityRemoteTopBar(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = activeSession?.workspaceName?.take(12)?.let { "$it..." }
-                            ?: "55d52da...",
+                        text = activeSession?.workspaceName?.take(14) ?: "No Session",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = fg,
@@ -1065,7 +1619,12 @@ private fun AntigravityRemoteTopBar(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Configure Remote Host (${latencyMs}ms)", color = fg) },
+                        text = {
+                            Text(
+                                text = if (latencyMs > 0) "Configure Remote Host (${latencyMs}ms)" else "Configure Remote Host",
+                                color = fg
+                            )
+                        },
                         onClick = {
                             showSessionMenu = false
                             onOpenServerModal()
@@ -1108,7 +1667,7 @@ private fun AntigravityRemoteTopBar(
                     .testTag("top_guide_button")
             ) {
                 Icon(
-                    imageVector = Icons.Default.HelpOutline,
+                    imageVector = Icons.AutoMirrored.Filled.HelpOutline,
                     contentDescription = "How to Connect & Use Guide",
                     tint = accent,
                     modifier = Modifier.size(19.dp)

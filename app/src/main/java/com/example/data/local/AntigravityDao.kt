@@ -112,4 +112,20 @@ interface AntigravityDao {
 
     @Query("DELETE FROM copilot_messages")
     suspend fun clearCopilotMessages()
+
+    // --- Clean Reset Queries ---
+    @Query("DELETE FROM server_profiles")
+    suspend fun clearAllServerProfiles()
+
+    @Query("DELETE FROM agent_sessions")
+    suspend fun clearAllAgentSessions()
+
+    @Query("DELETE FROM session_messages")
+    suspend fun clearAllSessionMessages()
+
+    @Query("DELETE FROM file_diffs")
+    suspend fun clearAllFileDiffs()
+
+    @Query("DELETE FROM terminal_logs")
+    suspend fun clearAllTerminalLogs()
 }
