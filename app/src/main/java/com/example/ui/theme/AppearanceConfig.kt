@@ -120,7 +120,8 @@ data class AppearanceSettings(
     val backgroundHex: String = "#070708",
     val foregroundHex: String = "#FFFFFF",
     val accentHex: String = "#FFC799",
-    val isFullscreenBarsHidden: Boolean = false
+    val isFullscreenBarsHidden: Boolean = false,
+    val showStartupGuideOnLaunch: Boolean = true
 ) {
     val backgroundColor: Color
         get() = if (themeMode == AntigravityThemeMode.LIGHT) {
@@ -213,7 +214,8 @@ class AppearancePreferencesManager(context: Context) {
             backgroundHex = prefs.getString("bg_hex", "#070708") ?: "#070708",
             foregroundHex = prefs.getString("fg_hex", "#FFFFFF") ?: "#FFFFFF",
             accentHex = prefs.getString("accent_hex", "#FFC799") ?: "#FFC799",
-            isFullscreenBarsHidden = prefs.getBoolean("fullscreen_bars_hidden", false)
+            isFullscreenBarsHidden = prefs.getBoolean("fullscreen_bars_hidden", false),
+            showStartupGuideOnLaunch = prefs.getBoolean("show_startup_guide_on_launch", true)
         )
     }
 
@@ -230,6 +232,7 @@ class AppearancePreferencesManager(context: Context) {
             .putString("fg_hex", next.foregroundHex)
             .putString("accent_hex", next.accentHex)
             .putBoolean("fullscreen_bars_hidden", next.isFullscreenBarsHidden)
+            .putBoolean("show_startup_guide_on_launch", next.showStartupGuideOnLaunch)
             .apply()
     }
 

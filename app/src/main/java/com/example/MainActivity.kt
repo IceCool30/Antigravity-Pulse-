@@ -93,6 +93,7 @@ import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
 import com.example.ui.screens.AppearanceSettingsSheet
 import com.example.ui.screens.CodeDiffAndTerminalScreen
+import com.example.ui.screens.ConnectionGuideScreen
 import com.example.ui.screens.CopilotAndImageStudioScreen
 import com.example.ui.screens.RetainedWebViewBridgeScreen
 import com.example.ui.screens.SessionsAndChatScreen
@@ -179,6 +180,7 @@ fun AntigravityPulseApp(
     val selectedInputBitmap by copilotViewModel.selectedInputBitmap.collectAsStateWithLifecycle()
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
+    var showConnectionGuide by rememberSaveable { mutableStateOf(appearance.showStartupGuideOnLaunch) }
     var showAppearanceSheet by rememberSaveable { mutableStateOf(false) }
     var showFloatingQuickMenu by rememberSaveable { mutableStateOf(false) }
     var showSearchBar by rememberSaveable { mutableStateOf(false) }
@@ -199,8 +201,62 @@ fun AntigravityPulseApp(
     val isBarsHidden = appearance.isFullscreenBarsHidden
 
     // Return to primary Sessions hub when pressing system Back from secondary tabs
-    BackHandler(enabled = !showAppearanceSheet && selectedTabIndex != 0) {
+    BackHandler(enabled = !showConnectionGuide && !showAppearanceSheet && selectedTabIndex != 0) {
         selectedTabIndex = 0
+    }
+
+    // Complete Step-by-Step Connection & Usage Guide (Shown automatically on launch or when opened from Settings)
+    if (showConnectionGuide) {
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(bg),
+            contentWindowInsets = WindowInsets.safeDrawing
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                ConnectionGuideScreen(
+                    settings = appearance,
+                    activeEndpointUrl = telemetry.activeEndpoint,
+                    onUpdateSettings = onUpdateAppearance,
+                    onQuickConnectWebBridge = { hostName, url, token ->
+                        antigravityViewModel.addOrUpdateServerProfile(
+                            existingId = null,
+                            name = hostName,
+                            endpointUrl = url,
+                            connectionMode = "HYBRID_BRIDGE",
+                            authToken = token,
+                            keepAlivePinned = true
+                        )
+                        selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
+                        showConnectionGuide = false
+                    },
+                    onQuickConnectNativeSessions = { hostName, url, token ->
+                        antigravityViewModel.addOrUpdateServerProfile(
+                            existingId = null,
+                            name = hostName,
+                            endpointUrl = url,
+                            connectionMode = "HYBRID_BRIDGE",
+                            authToken = token,
+                            keepAlivePinned = true
+                        )
+                        selectedTabIndex = PulseTab.SESSIONS.ordinal
+                        showConnectionGuide = false
+                    },
+                    onOpenAppearanceSettings = {
+                        showConnectionGuide = false
+                        showAppearanceSheet = true
+                    },
+                    onCloseGuide = {
+                        showConnectionGuide = false
+                    }
+                )
+            }
+        }
+        return
     }
 
     if (showAppearanceSheet) {
@@ -220,6 +276,10 @@ fun AntigravityPulseApp(
                     onUpdateSettings = onUpdateAppearance,
                     onSelectPreset = onSelectPreset,
                     onResetPreset = onResetPreset,
+                    onOpenConnectionGuide = {
+                        showAppearanceSheet = false
+                        showConnectionGuide = true
+                    },
                     onClose = { showAppearanceSheet = false }
                 )
             }
@@ -259,7 +319,7 @@ fun AntigravityPulseApp(
                         onToggleSearch = { showSearchBar = !showSearchBar },
                         onOpenAppearance = { showAppearanceSheet = true },
                         onPingRefresh = antigravityViewModel::pingActiveServer,
-                        onOpenExplainer = { showBridgeExplainerModal = true },
+                        onOpenExplainer = { showConnectionGuide = true },
                         onHideBarsFullscreen = {
                             onUpdateAppearance { it.copy(isFullscreenBarsHidden = true) }
                         }
@@ -574,6 +634,32 @@ fun AntigravityPulseApp(
                                     text = "Appearance",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = fg
+                                )
+                            }
+
+                            // Quick Connection Guide button
+                            Row(
+                                modifier = Modifier
+                                    .width(148.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable {
+                                        showFloatingQuickMenu = false
+                                        showConnectionGuide = true
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.HelpOutline,
+                                    contentDescription = "How to Connect Guide",
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "How to Use Guide",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = accent
                                 )
                             }
 
@@ -985,11 +1071,18 @@ private fun AntigravityRemoteTopBar(
                             onOpenServerModal()
                         }
                     )
+                    DropdownMenuItem(
+                        text = { Text("How to Connect & Use Guide", color = accent) },
+                        onClick = {
+                            showSessionMenu = false
+                            onOpenExplainer()
+                        }
+                    )
                 }
             }
         }
 
-        // Right: Search (🔍), Appearance Settings (⚙️), Refresh/Ping (↻), Fullscreen Hide Bars (⛶)
+        // Right: Search (🔍), Guide (?), Appearance Settings (⚙️), Refresh/Ping (↻), Fullscreen Hide Bars (⛶)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -997,56 +1090,70 @@ private fun AntigravityRemoteTopBar(
             IconButton(
                 onClick = onToggleSearch,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(36.dp)
                     .testTag("top_search_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Search,
                     contentDescription = "Search Session",
                     tint = secondaryFg,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+
+            IconButton(
+                onClick = onOpenExplainer,
+                modifier = Modifier
+                    .size(36.dp)
+                    .testTag("top_guide_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.HelpOutline,
+                    contentDescription = "How to Connect & Use Guide",
+                    tint = accent,
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
             IconButton(
                 onClick = onOpenAppearance,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(36.dp)
                     .testTag("top_appearance_settings_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
                     contentDescription = "Appearance & Theme Customizer",
                     tint = secondaryFg,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
             IconButton(
                 onClick = onPingRefresh,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(36.dp)
                     .testTag("top_refresh_bridge_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = "Ping & Refresh Bridge",
                     tint = secondaryFg,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
             IconButton(
                 onClick = onHideBarsFullscreen,
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(36.dp)
                     .testTag("top_hide_bars_fullscreen_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Fullscreen,
                     contentDescription = "Hide Top & Bottom Bars for Fullscreen",
                     tint = accent,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(21.dp)
                 )
             }
         }

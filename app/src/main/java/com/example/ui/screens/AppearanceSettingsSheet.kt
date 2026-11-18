@@ -93,6 +93,7 @@ fun AppearanceSettingsSheet(
     onUpdateSettings: ((AppearanceSettings) -> AppearanceSettings) -> Unit,
     onSelectPreset: (AntigravityThemePreset) -> Unit,
     onResetPreset: () -> Unit,
+    onOpenConnectionGuide: () -> Unit,
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
@@ -119,7 +120,7 @@ fun AppearanceSettingsSheet(
             .background(bg)
             .testTag("appearance_settings_sheet")
     ) {
-        // Top Drag Handle + "< Back" Header Bar matching Screenshot 3
+        // Top Drag Handle + "< Back" Header Bar matching Screenshot 3 + Quick Guide Button
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -138,23 +139,43 @@ fun AppearanceSettingsSheet(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onClose() }
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
-                    .testTag("appearance_back_button"),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = "Back",
-                    tint = secondaryFg,
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Back",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = fg
-                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onClose() }
+                        .padding(vertical = 4.dp, horizontal = 4.dp)
+                        .testTag("appearance_back_button"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                        contentDescription = "Back",
+                        tint = secondaryFg,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Back",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = fg
+                    )
+                }
+
+                TextButton(
+                    onClick = onOpenConnectionGuide,
+                    modifier = Modifier.testTag("settings_header_guide_button")
+                ) {
+                    Text(
+                        text = "Step-by-Step Guide",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = accent
+                    )
+                }
             }
             HorizontalDivider(color = border, thickness = 1.dp)
         }
@@ -678,6 +699,15 @@ fun AppearanceSettingsSheet(
                         }
                     }
                 }
+            }
+
+            // SECTION 3: Complete Step-by-Step Connection & Usage Guide directly inside Settings
+            item {
+                SettingsEmbeddedGuideSection(
+                    settings = settings,
+                    onUpdateSettings = onUpdateSettings,
+                    onOpenFullInteractiveGuide = onOpenConnectionGuide
+                )
             }
         }
     }
