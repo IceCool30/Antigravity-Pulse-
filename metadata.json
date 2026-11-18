@@ -1,0 +1,6 @@
+{
+  "name": "Antigravity Pulse",
+  "description": "Native Android remote bridge, zero-reload conversation stream, diff viewer, terminal, and Gemini AI Copilot for Google Antigravity workspaces.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,165 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Reusable Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidCloudServerProfile(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.endpointUrl is string && data.endpointUrl.size() >= 1 && data.endpointUrl.size() <= 300 &&
+             data.connectionMode is string && (
+               data.connectionMode == 'HYBRID_BRIDGE' ||
+               data.connectionMode == 'DIRECT_TUNNEL' ||
+               data.connectionMode == 'PAIRING_TOKEN' ||
+               data.connectionMode == 'SIMULATOR'
+             ) &&
+             data.authToken is string && data.authToken.size() <= 256 &&
+             data.keepAlivePinned is bool &&
+             data.lastLatencyMs is int && data.lastLatencyMs >= 0 && data.lastLatencyMs <= 60000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCloudSyncedSession(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.workspaceName is string && data.workspaceName.size() >= 1 && data.workspaceName.size() <= 120 &&
+             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
+             data.status is string && (
+               data.status == 'ACTIVE' ||
+               data.status == 'AWAITING_APPROVAL' ||
+               data.status == 'IDLE' ||
+               data.status == 'COMPLETED'
+             ) &&
+             data.lastSummary is string && data.lastSummary.size() <= 2000 &&
+             data.messageCount is int && data.messageCount >= 0 && data.messageCount <= 100000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCloudCopilotPrompt(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.promptText is string && data.promptText.size() >= 1 && data.promptText.size() <= 5000 &&
+             data.rolePersona is string && data.rolePersona.size() >= 1 && data.rolePersona.size() <= 80 &&
+             data.preferredModel is string && data.preferredModel.size() >= 1 && data.preferredModel.size() <= 80 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 4. User-Scoped Collections
+    match /users/{userId}/serverProfiles/{profileId} {
+      allow get: if isOwner(userId) && isValidId(profileId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(profileId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'name', 'endpointUrl', 'connectionMode',
+                         'authToken', 'keepAlivePinned', 'lastLatencyMs',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'name', 'endpointUrl', 'connectionMode',
+                         'authToken', 'keepAlivePinned', 'lastLatencyMs',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCloudServerProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(profileId) &&
+                       isValidCloudServerProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'name', 'endpointUrl', 'connectionMode',
+                         'authToken', 'keepAlivePinned', 'lastLatencyMs',
+                         'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(profileId);
+    }
+
+    match /users/{userId}/syncedSessions/{sessionId} {
+      allow get: if isOwner(userId) && isValidId(sessionId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(sessionId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'workspaceName', 'branchName', 'status',
+                         'lastSummary', 'messageCount', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'workspaceName', 'branchName', 'status',
+                         'lastSummary', 'messageCount', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCloudSyncedSession(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(sessionId) &&
+                       isValidCloudSyncedSession(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'workspaceName', 'branchName', 'status',
+                         'lastSummary', 'messageCount', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(sessionId);
+    }
+
+    match /users/{userId}/copilotPrompts/{promptId} {
+      allow get: if isOwner(userId) && isValidId(promptId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(promptId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'title', 'promptText', 'rolePersona',
+                         'preferredModel', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'title', 'promptText', 'rolePersona',
+                         'preferredModel', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCloudCopilotPrompt(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(promptId) &&
+                       isValidCloudCopilotPrompt(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'title', 'promptText', 'rolePersona',
+                         'preferredModel', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(promptId);
+    }
+  }
+}

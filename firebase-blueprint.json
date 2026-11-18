@@ -1,0 +1,173 @@
+{
+  "entities": {
+    "CloudServerProfile": {
+      "title": "CloudServerProfile",
+      "description": "Synced Antigravity remote server connection profile.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name for the Antigravity remote host."
+        },
+        "endpointUrl": {
+          "type": "string",
+          "description": "Host URL or WebSocket tunnel endpoint."
+        },
+        "connectionMode": {
+          "type": "string",
+          "enum": ["HYBRID_BRIDGE", "DIRECT_TUNNEL", "PAIRING_TOKEN", "SIMULATOR"],
+          "description": "Bridge connection transport mode."
+        },
+        "authToken": {
+          "type": "string",
+          "description": "Optional pairing or bearer token."
+        },
+        "keepAlivePinned": {
+          "type": "boolean",
+          "description": "Whether background socket and WebView state are pinned in memory."
+        },
+        "lastLatencyMs": {
+          "type": "integer",
+          "description": "Last measured ping latency in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "endpointUrl",
+        "connectionMode",
+        "authToken",
+        "keepAlivePinned",
+        "lastLatencyMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudSyncedSession": {
+      "title": "CloudSyncedSession",
+      "description": "Synced Antigravity remote agent conversation summary and state.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "workspaceName": {
+          "type": "string",
+          "description": "Project workspace name in Antigravity."
+        },
+        "branchName": {
+          "type": "string",
+          "description": "Git branch active in the session."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "AWAITING_APPROVAL", "IDLE", "COMPLETED"],
+          "description": "Current execution state of the remote agent."
+        },
+        "lastSummary": {
+          "type": "string",
+          "description": "Latest agent step or conversation summary."
+        },
+        "messageCount": {
+          "type": "integer",
+          "description": "Number of messages in the session."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "workspaceName",
+        "branchName",
+        "status",
+        "lastSummary",
+        "messageCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CloudCopilotPrompt": {
+      "title": "CloudCopilotPrompt",
+      "description": "Saved Gemini Copilot engineering prompt template or architectural bookmark.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Short title of the saved prompt or copilot output."
+        },
+        "promptText": {
+          "type": "string",
+          "description": "Full engineering prompt or architectural specification."
+        },
+        "rolePersona": {
+          "type": "string",
+          "description": "Copilot system persona used."
+        },
+        "preferredModel": {
+          "type": "string",
+          "description": "Gemini model identifier."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "title",
+        "promptText",
+        "rolePersona",
+        "preferredModel",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/serverProfiles/{profileId}": {
+      "schema": { "$ref": "#/entities/CloudServerProfile" },
+      "description": "Per-user synced Antigravity server connection profiles."
+    },
+    "/users/{userId}/syncedSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/CloudSyncedSession" },
+      "description": "Per-user synced Antigravity agent session snapshots."
+    },
+    "/users/{userId}/copilotPrompts/{promptId}": {
+      "schema": { "$ref": "#/entities/CloudCopilotPrompt" },
+      "description": "Per-user saved Gemini Copilot prompts and architectural plans."
+    }
+  }
+}
