@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Terminal
@@ -47,7 +48,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -108,6 +111,9 @@ fun SessionsAndChatScreen(
     var promptInput by rememberSaveable(selectedSessionId) {
         mutableStateOf(activeSession?.draftPrompt.orEmpty())
     }
+    var showAddContextSheet by rememberSaveable { mutableStateOf(false) }
+    var showLiveVoiceModal by rememberSaveable { mutableStateOf(false) }
+    val attachedContexts = remember { mutableStateListOf<ContextAttachmentItem>() }
 
     val listState = rememberLazyListState()
     LaunchedEffect(displayedMessages.size, selectedSessionId) {
@@ -315,14 +321,44 @@ fun SessionsAndChatScreen(
             }
         }
 
-        // Native Prompt Composer (Persists draft automatically across app minimizing)
+        // Attached Context Chips Row (Files, Folder, Mentions, Actions, Browser, Drive)
+        AttachedContextChipsRow(
+            attachments = attachedContexts,
+            accent = accent,
+            elevated = elevated,
+            border = border,
+            fg = fg,
+            onRemove = { attachedContexts.remove(it) },
+            onClearAll = { attachedContexts.clear() }
+        )
+
+        // Native Prompt Composer (+ Add Context, Text Input, Live Voice gemini-3.8-live, Send)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(surface)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // + Add Context Button (Matches Screenshot `Screenshot_20261118-121321_9d1e3e6a.png`)
+            IconButton(
+                onClick = { showAddContextSheet = true },
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(elevated)
+                    .border(1.dp, border, RoundedCornerShape(12.dp))
+                    .testTag("open_add_context_sheet_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add Context (Files, Folder, Mentions, Actions, Browser, Drive)",
+                    tint = accent
+                )
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
             OutlinedTextField(
                 value = promptInput,
                 onValueChange = { newText ->
@@ -331,9 +367,11 @@ fun SessionsAndChatScreen(
                 },
                 placeholder = {
                     Text(
-                        "Ask Antigravity Agent or run /browser...",
+                        "Ask Antigravity, tap + for context, or 🎙️ Live...",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = secondaryFg
+                        color = secondaryFg,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 },
                 modifier = Modifier
@@ -341,13 +379,42 @@ fun SessionsAndChatScreen(
                     .testTag("agent_prompt_input"),
                 maxLines = 3
             )
-            Spacer(modifier = Modifier.width(8.dp))
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Gemini Live Voice (gemini-3.8-live) Button
+            IconButton(
+                onClick = { showLiveVoiceModal = true },
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(NeuralViolet.copy(alpha = 0.2f))
+                    .border(1.dp, NeuralViolet.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                    .testTag("open_live_voice_session_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.GraphicEq,
+                    contentDescription = "Voice Conversation (gemini-3.8-live)",
+                    tint = NeuralViolet
+                )
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
             IconButton(
                 onClick = {
-                    if (promptInput.isNotBlank()) {
-                        val toSend = promptInput
+                    if (promptInput.isNotBlank() || attachedContexts.isNotEmpty()) {
+                        val contextPrefix = if (attachedContexts.isNotEmpty()) {
+                            attachedContexts.joinToString("\n") { it.promptContextSnippet } + "\n\n"
+                        } else {
+                            ""
+                        }
+                        val combined = (contextPrefix + promptInput.ifBlank {
+                            "Execute with the attached context items."
+                        }).trim()
                         promptInput = ""
-                        onSendPrompt(toSend)
+                        attachedContexts.clear()
+                        onSendPrompt(combined)
                     }
                 },
                 modifier = Modifier
@@ -363,6 +430,38 @@ fun SessionsAndChatScreen(
                 )
             }
         }
+    }
+
+    if (showAddContextSheet) {
+        AntigravityAddContextSheet(
+            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
+            activeWorkspaceName = activeSession?.workspaceName ?: "antigravity-workspace",
+            onAttachContext = { item ->
+                if (attachedContexts.none { it.id == item.id }) {
+                    attachedContexts.add(item)
+                }
+                if (item.category == "Actions" && promptInput.isBlank()) {
+                    promptInput = item.displayLabel + " "
+                } else if (item.category == "Mentions" && !promptInput.contains(item.displayLabel)) {
+                    promptInput = (promptInput + " " + item.displayLabel).trimStart() + " "
+                }
+            },
+            onDismiss = { showAddContextSheet = false }
+        )
+    }
+
+    if (showLiveVoiceModal) {
+        GeminiLiveVoiceModal(
+            activeWorkspaceName = activeSession?.workspaceName ?: "antigravity-workspace",
+            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
+            onDispatchPromptToAntigravity = { spokenPrompt ->
+                onSendPrompt("[Live Voice Command]: $spokenPrompt")
+            },
+            onRunRemoteTerminalCommand = { spokenCmd ->
+                onSendPrompt("/run $spokenCmd")
+            },
+            onDismiss = { showLiveVoiceModal = false }
+        )
     }
 }
 

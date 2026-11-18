@@ -116,12 +116,12 @@ val CompleteAntigravityGuideSteps = listOf(
     ),
     GuideStepInfo(
         stepNumber = 5,
-        title = "Customize Themes, Fonts & Cloud Sync",
-        subtitle = "Tailor the interface with official Antigravity presets and sync across devices",
+        title = "Add Context (+), Live Voice & Themes",
+        subtitle = "Attach Files/Folders/Mentions/Browser/Drive, talk via gemini-3.8-live, and customize themes",
         bullets = listOf(
-            "12 Official Theme Presets: Tap ⚙️ in the top bar to switch between Default Dark, Legacy Dark, Catppuccin, Dracula, Everforest, Gruvbox Material, Monokai, Nord, One Dark Pro, Tokyo Night, Solarized Dark, and Vesper.",
-            "Custom Hex & Fonts: Tap the Background (#070708), Foreground (#FFFFFF), or Accent (#FFC799) pills to enter custom hex colors, or switch fonts (Google Sans, JetBrains Mono, Fira Code) and font sizes.",
-            "AI Copilot & Cloud Sync: Use 'AI Copilot' to draft prompts or generate UI assets with Gemini, and use 'Storage & Sync' to back up your hosts with Google Sign-In."
+            "Add Context (+ Button): Tap '+' next to the prompt box to attach Files (or phone screenshots), Folder trees, @Mentions, slash Actions, live Chrome MCP Browser state, or Google Drive specs.",
+            "Gemini Live Voice (🎙️ Icon): Tap the waveform icon next to the prompt box to start a real-time voice conversation with gemini-3.8-live and dispatch commands to Antigravity hands-free.",
+            "12 Official Theme Presets: Tap ⚙️ in the top bar to switch between Default Dark, Legacy Dark, Catppuccin, Dracula, Everforest, Gruvbox Material, Monokai, Nord, One Dark Pro, Tokyo Night, Solarized Dark, and Vesper."
         )
     )
 )

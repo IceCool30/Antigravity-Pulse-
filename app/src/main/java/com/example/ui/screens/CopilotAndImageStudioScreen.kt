@@ -25,9 +25,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material3.Button
@@ -47,7 +49,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -98,6 +102,9 @@ fun CopilotAndImageStudioScreen(
     var activeMode by rememberSaveable { mutableIntStateOf(0) } // 0 = Gemini Copilot Chat, 1 = Nano Banana Image Studio
     var chatInput by rememberSaveable { mutableStateOf("") }
     var imagePromptInput by rememberSaveable { mutableStateOf("") }
+    var showAddContextSheet by rememberSaveable { mutableStateOf(false) }
+    var showLiveVoiceModal by rememberSaveable { mutableStateOf(false) }
+    val attachedContexts = remember { mutableStateListOf<ContextAttachmentItem>() }
 
     // Zero-permission Android Photo Picker for image editing
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -123,10 +130,10 @@ fun CopilotAndImageStudioScreen(
             .background(bg)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        // Top Mode Switcher: Multi-Turn Gemini Copilot vs Nano Banana 2.1 Asset Studio
+        // Top Mode Switcher: Multi-Turn Gemini Copilot vs Nano Banana 2.1 Asset Studio vs Live Voice (gemini-3.8-live)
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             FilterChip(
                 selected = activeMode == 0,
@@ -136,10 +143,10 @@ fun CopilotAndImageStudioScreen(
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = "Gemini Copilot Chat",
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(15.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Gemini Copilot")
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copilot")
                     }
                 },
                 colors = FilterChipDefaults.filterChipColors(
@@ -159,10 +166,10 @@ fun CopilotAndImageStudioScreen(
                         Icon(
                             imageVector = Icons.Default.Brush,
                             contentDescription = "Nano Banana 2.1 Image Studio",
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(15.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("UI Image Studio")
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Image Studio")
                     }
                 },
                 colors = FilterChipDefaults.filterChipColors(
@@ -172,6 +179,29 @@ fun CopilotAndImageStudioScreen(
                 modifier = Modifier
                     .weight(1f)
                     .testTag("copilot_mode_image_studio")
+            )
+
+            FilterChip(
+                selected = showLiveVoiceModal,
+                onClick = { showLiveVoiceModal = true },
+                label = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.GraphicEq,
+                            contentDescription = "Gemini Live Voice (gemini-3.8-live)",
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Live Voice")
+                    }
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = EmeraldOnline.copy(alpha = 0.22f),
+                    selectedLabelColor = EmeraldOnline
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("copilot_mode_live_voice")
             )
         }
 
@@ -366,19 +396,48 @@ fun CopilotAndImageStudioScreen(
                 }
             }
 
-            // 4. Copilot Chat Input Bar
+            // Attached Context Chips Row
+            AttachedContextChipsRow(
+                attachments = attachedContexts,
+                accent = accent,
+                elevated = elevated,
+                border = border,
+                fg = fg,
+                onRemove = { attachedContexts.remove(it) },
+                onClearAll = { attachedContexts.clear() }
+            )
+
+            // 4. Copilot Chat Input Bar (+ Add Context, Text Input, Live Voice, Send)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(
+                    onClick = { showAddContextSheet = true },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(elevated)
+                        .border(1.dp, border, RoundedCornerShape(12.dp))
+                        .testTag("copilot_open_add_context_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add Context (Files, Folder, Mentions, Actions, Browser, Drive)",
+                        tint = accent
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 OutlinedTextField(
                     value = chatInput,
                     onValueChange = { chatInput = it },
                     placeholder = {
                         Text(
-                            "Draft an Antigravity agent prompt or debug architecture...",
+                            "Draft prompt, tap + for context, or 🎙️ Live...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = secondaryFg
                         )
@@ -388,12 +447,40 @@ fun CopilotAndImageStudioScreen(
                         .weight(1f)
                         .testTag("copilot_chat_input")
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                IconButton(
+                    onClick = { showLiveVoiceModal = true },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(EmeraldOnline.copy(alpha = 0.18f))
+                        .border(1.dp, EmeraldOnline.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                        .testTag("copilot_open_live_voice_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.GraphicEq,
+                        contentDescription = "Start Gemini Live Voice Conversation",
+                        tint = EmeraldOnline
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
                 IconButton(
                     onClick = {
-                        if (chatInput.isNotBlank()) {
-                            val toSend = chatInput
+                        if (chatInput.isNotBlank() || attachedContexts.isNotEmpty()) {
+                            val contextPrefix = if (attachedContexts.isNotEmpty()) {
+                                attachedContexts.joinToString("\n") { it.promptContextSnippet } + "\n\n"
+                            } else {
+                                ""
+                            }
+                            val toSend = (contextPrefix + chatInput.ifBlank {
+                                "Analyze the attached context items and recommend the best Antigravity agent steps."
+                            }).trim()
                             chatInput = ""
+                            attachedContexts.clear()
                             onSendChatMessage(toSend)
                         }
                     },
@@ -668,5 +755,37 @@ fun CopilotAndImageStudioScreen(
                 }
             }
         }
+    }
+
+    if (showAddContextSheet) {
+        AntigravityAddContextSheet(
+            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
+            activeWorkspaceName = "antigravity-pulse",
+            onAttachContext = { item ->
+                if (attachedContexts.none { it.id == item.id }) {
+                    attachedContexts.add(item)
+                }
+                if (item.category == "Actions" && chatInput.isBlank()) {
+                    chatInput = item.displayLabel + " "
+                } else if (item.category == "Mentions" && !chatInput.contains(item.displayLabel)) {
+                    chatInput = (chatInput + " " + item.displayLabel).trimStart() + " "
+                }
+            },
+            onDismiss = { showAddContextSheet = false }
+        )
+    }
+
+    if (showLiveVoiceModal) {
+        GeminiLiveVoiceModal(
+            activeWorkspaceName = "antigravity-pulse",
+            activeEndpointUrl = "https://antigravity.local.tailnet.ts.net:8443",
+            onDispatchPromptToAntigravity = { spokenPrompt ->
+                onForwardToAntigravityAgent(spokenPrompt)
+            },
+            onRunRemoteTerminalCommand = { spokenCmd ->
+                onForwardToAntigravityAgent("/run $spokenCmd")
+            },
+            onDismiss = { showLiveVoiceModal = false }
+        )
     }
 }
