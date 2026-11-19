@@ -1,12 +1,22 @@
 package com.example
 
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.view.WindowManager
+import android.webkit.MimeTypeMap
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -36,12 +46,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
@@ -70,6 +77,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -101,14 +109,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.cloud.configureAppCheck
 import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
-import com.example.data.remote.ApprovalNotificationHelper
 import com.example.data.remote.RetainedWebViewManager
 import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
 import com.example.ui.screens.AppearanceSettingsSheet
-import com.example.ui.screens.ConnectionGuideScreen
-import com.example.ui.screens.CopilotAndImageStudioScreen
-import com.example.ui.screens.GeminiLiveVoiceModal
 import com.example.ui.screens.QrPairingScannerDialog
 import com.example.ui.screens.RetainedWebViewBridgeScreen
 import com.example.ui.screens.StorageAndCloudSyncScreen
@@ -117,8 +121,8 @@ import com.example.ui.theme.AppearancePreferencesManager
 import com.example.ui.theme.AppearanceSettings
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
+import com.example.ui.theme.frostedGlass
 import com.example.viewmodel.AntigravityViewModel
-import com.example.viewmodel.CopilotViewModel
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -134,24 +138,56 @@ class MainActivity : FragmentActivity() {
             val appearanceManager = remember { AppearancePreferencesManager(context) }
             val appearance by appearanceManager.settings.collectAsStateWithLifecycle()
             var isBiometricUnlocked by rememberSaveable { mutableStateOf(!appearance.isBiometricLockEnabled) }
+            var hasUnlockedOnce by rememberSaveable { mutableStateOf(!appearance.isBiometricLockEnabled) }
 
-            AntigravityPulseTheme(appearance = appearance) {
-                if (appearance.isBiometricLockEnabled && !isBiometricUnlocked) {
-                    BiometricLockGateScreen(
-                        activity = this@MainActivity,
-                        appearance = appearance,
-                        onUnlocked = { isBiometricUnlocked = true }
+            // Protect against screenshots, screen capture, and Recents thumbnail leaks when Biometric Lock is active
+            LaunchedEffect(appearance.isBiometricLockEnabled) {
+                if (appearance.isBiometricLockEnabled) {
+                    window.setFlags(
+                        WindowManager.LayoutParams.FLAG_SECURE,
+                        WindowManager.LayoutParams.FLAG_SECURE
                     )
                 } else {
-                    AntigravityPulseApp(
-                        appearance = appearance,
-                        onUpdateAppearance = appearanceManager::update,
-                        onSelectPreset = appearanceManager::applyPreset,
-                        onResetPreset = appearanceManager::resetCurrentPresetColors
-                    )
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+            }
+
+            AntigravityPulseTheme(appearance = appearance) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // Keep the live remote session mounted once unlocked so returning from
+                    // background/biometric lock drops straight back into the exact active session.
+                    if (!appearance.isBiometricLockEnabled || isBiometricUnlocked || hasUnlockedOnce) {
+                        AntigravityPulseApp(
+                            appearance = appearance,
+                            onUpdateAppearance = appearanceManager::update,
+                            onSelectPreset = appearanceManager::applyPreset,
+                            onResetPreset = appearanceManager::resetCurrentPresetColors
+                        )
+                    }
+
+                    if (appearance.isBiometricLockEnabled && !isBiometricUnlocked) {
+                        BiometricLockGateScreen(
+                            activity = this@MainActivity,
+                            appearance = appearance,
+                            onUnlocked = {
+                                hasUnlockedOnce = true
+                                isBiometricUnlocked = true
+                            }
+                        )
+                    }
                 }
             }
         }
+    }
+
+    override fun onPause() {
+        RetainedWebViewManager.flushCookies()
+        super.onPause()
+    }
+
+    override fun onStop() {
+        RetainedWebViewManager.flushCookies()
+        super.onStop()
     }
 }
 
@@ -161,12 +197,14 @@ private fun BiometricLockGateScreen(
     appearance: AppearanceSettings,
     onUnlocked: () -> Unit
 ) {
-    val bg = appearance.backgroundColor
-    val surface = appearance.surfaceColor
-    val border = appearance.borderColor
-    val fg = appearance.foregroundColor
-    val secondaryFg = appearance.secondaryTextColor
-    val accent = appearance.accentColor
+    val activeTheme = LocalAppearanceSettings.current
+    val bg = activeTheme.backgroundColor
+    val surface = activeTheme.surfaceColor
+    val border = activeTheme.borderColor
+    val fg = activeTheme.foregroundColor
+    val secondaryFg = activeTheme.secondaryTextColor
+    val accent = activeTheme.accentColor
+    val isFrostedGlass = activeTheme.isFrostedGlassEnabled
 
     var authError by remember { mutableStateOf<String?>(null) }
 
@@ -234,9 +272,16 @@ private fun BiometricLockGateScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(surface)
-                    .border(1.dp, border, RoundedCornerShape(20.dp))
+                    .frostedGlass(
+                        shape = RoundedCornerShape(24.dp),
+                        baseColor = surface,
+                        tintColor = accent,
+                        borderColor = border,
+                        enabled = isFrostedGlass,
+                        fillAlpha = 0.84f,
+                        tintAlpha = 0.08f,
+                        borderAlpha = 0.65f
+                    )
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -285,7 +330,7 @@ private fun BiometricLockGateScreen(
                     onClick = { launchBiometricPrompt() },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = accent,
-                        contentColor = Color(0xFF070708)
+                        contentColor = Color(0xFF000000)
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -322,7 +367,6 @@ private enum class PulseTab(
     val tag: String
 ) {
     WEB_BRIDGE(R.string.nav_bridge, Icons.Default.Language, "nav_tab_bridge"),
-    COPILOT(R.string.nav_copilot, Icons.Default.AutoAwesome, "nav_tab_copilot"),
     STORAGE_SYNC(R.string.nav_sync, Icons.Default.CloudSync, "nav_tab_sync")
 }
 
@@ -339,52 +383,108 @@ fun AntigravityPulseApp(
     val antigravityViewModel: AntigravityViewModel = viewModel(
         factory = AntigravityViewModel.provideFactory(dao)
     )
-    val copilotViewModel: CopilotViewModel = viewModel(
-        factory = CopilotViewModel.provideFactory(dao)
-    )
 
     val serverProfiles by antigravityViewModel.serverProfiles.collectAsStateWithLifecycle()
     val telemetry by antigravityViewModel.bridgeTelemetry.collectAsStateWithLifecycle()
     val statusBanner by antigravityViewModel.statusBanner.collectAsStateWithLifecycle()
 
-    val copilotMessages by copilotViewModel.messages.collectAsStateWithLifecycle()
-    val selectedModel by copilotViewModel.selectedModel.collectAsStateWithLifecycle()
-    val selectedPersona by copilotViewModel.selectedPersona.collectAsStateWithLifecycle()
-    val chatUiState by copilotViewModel.chatUiState.collectAsStateWithLifecycle()
-    val imageUiState by copilotViewModel.imageUiState.collectAsStateWithLifecycle()
-    val selectedInputBitmap by copilotViewModel.selectedInputBitmap.collectAsStateWithLifecycle()
-
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(PulseTab.WEB_BRIDGE.ordinal) }
-    var showConnectionGuide by rememberSaveable { mutableStateOf(appearance.showStartupGuideOnLaunch) }
     var showAppearanceSheet by rememberSaveable { mutableStateOf(false) }
     var showFloatingQuickMenu by rememberSaveable { mutableStateOf(false) }
     var showServerModal by rememberSaveable { mutableStateOf(false) }
     var showGlobalQrScanner by rememberSaveable { mutableStateOf(false) }
-    var showGlobalLiveVoice by rememberSaveable { mutableStateOf(false) }
 
     val activeProfile = serverProfiles.firstOrNull { it.isSelected } ?: serverProfiles.firstOrNull()
+
+    // Native Android System File Picker hook for WebView <input type="file"> (e.g., Antigravity Remote "+" attach button)
+    var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    val webFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val callback = pendingFileCallback
+        pendingFileCallback = null
+        if (callback == null) return@rememberLauncherForActivityResult
+
+        val selectedUris = mutableListOf<Uri>()
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val data = result.data
+            val clipData = data?.clipData
+            if (clipData != null && clipData.itemCount > 0) {
+                for (i in 0 until clipData.itemCount) {
+                    clipData.getItemAt(i)?.uri?.let { selectedUris.add(it) }
+                }
+            } else {
+                data?.data?.let { selectedUris.add(it) }
+            }
+        }
+        callback.onReceiveValue(
+            if (selectedUris.isNotEmpty()) selectedUris.toTypedArray() else null
+        )
+    }
+
+    DisposableEffect(Unit) {
+        RetainedWebViewManager.onShowFileChooserHandler = { filePathCallback, fileChooserParams ->
+            // Always release any stale callback so WebView never deadlocks on subsequent "+" clicks
+            pendingFileCallback?.onReceiveValue(null)
+            pendingFileCallback = filePathCallback
+
+            try {
+                val openDocIntent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+                    val rawAccepts = fileChooserParams?.acceptTypes
+                        ?.flatMap { it.split(",") }
+                        ?.map { it.trim() }
+                        ?.filter { it.isNotEmpty() }
+                        .orEmpty()
+
+                    if (rawAccepts.isNotEmpty() && rawAccepts.none { it == "*/*" }) {
+                        val resolvedMimes = rawAccepts.mapNotNull { token ->
+                            when {
+                                token.contains("/") -> token
+                                token.startsWith(".") -> MimeTypeMap.getSingleton()
+                                    .getMimeTypeFromExtension(token.removePrefix(".").lowercase())
+                                else -> null
+                            }
+                        }.distinct()
+
+                        // Only restrict picker types when every requested type resolved to a real MIME type
+                        if (resolvedMimes.isNotEmpty() && resolvedMimes.size == rawAccepts.size) {
+                            putExtra(Intent.EXTRA_MIME_TYPES, resolvedMimes.toTypedArray())
+                        }
+                    }
+                }
+                val chooserTitle = fileChooserParams?.title?.takeIf { it.isNotBlank() }
+                    ?: "Select files from device"
+                webFilePickerLauncher.launch(Intent.createChooser(openDocIntent, chooserTitle))
+                true
+            } catch (_: Exception) {
+                pendingFileCallback?.onReceiveValue(null)
+                pendingFileCallback = null
+                false
+            }
+        }
+
+        onDispose {
+            pendingFileCallback?.onReceiveValue(null)
+            pendingFileCallback = null
+            RetainedWebViewManager.onShowFileChooserHandler = null
+        }
+    }
 
     // Keep auto-reconnect policy synced with persisted settings
     LaunchedEffect(appearance.isAutoReconnectEnabled) {
         antigravityViewModel.setAutoReconnectEnabled(appearance.isAutoReconnectEnabled)
     }
 
-    // Post actionable Android notifications whenever a step approval arrives while enabled
-    LaunchedEffect(appearance.isApprovalNotificationsEnabled) {
-        antigravityViewModel.pendingApprovalNotificationEvents.collect { approvalMsg ->
-            if (appearance.isApprovalNotificationsEnabled) {
-                val posted = ApprovalNotificationHelper.showStepApprovalNotification(
-                    context = context,
-                    messageId = approvalMsg.id,
-                    workspaceName = activeProfile?.name ?: "Antigravity Remote",
-                    command = approvalMsg.commandOrPath
-                )
-                if (!posted) {
-                    antigravityViewModel.recordWebViewBridgeEvent(
-                        "Enable Notification permission in Settings to approve steps from the shade."
-                    )
-                }
-            }
+    // Sync active endpoint URL to synchronous SharedPreferences for instant restore after unlock/restart
+    LaunchedEffect(telemetry.activeEndpoint) {
+        val clean = telemetry.activeEndpoint.trim()
+        if (RetainedWebViewManager.isSafeHttpUrl(clean) && appearance.lastActiveRemoteUrl != clean) {
+            onUpdateAppearance { it.copy(lastActiveRemoteUrl = clean) }
         }
     }
 
@@ -401,7 +501,7 @@ fun AntigravityPulseApp(
 
     // Smart Back navigation: close floating panel -> return to Remote tab -> go back inside WebView
     BackHandler(
-        enabled = !showConnectionGuide && !showAppearanceSheet &&
+        enabled = !showAppearanceSheet &&
             (showFloatingQuickMenu || selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal || RetainedWebViewManager.canGoBack())
     ) {
         when {
@@ -415,6 +515,9 @@ fun AntigravityPulseApp(
         val cleanUrl = url.trim()
         if (cleanUrl.isBlank()) return
         val cleanName = hostName.trim().ifBlank { "Antigravity Remote" }
+        if (RetainedWebViewManager.isSafeHttpUrl(cleanUrl)) {
+            onUpdateAppearance { it.copy(lastActiveRemoteUrl = cleanUrl) }
+        }
         antigravityViewModel.addOrUpdateServerProfile(
             existingId = null,
             name = cleanName,
@@ -425,40 +528,6 @@ fun AntigravityPulseApp(
         )
         RetainedWebViewManager.reloadOrForceLoadUrl(cleanUrl, telemetry.domLagBoosterEnabled)
         selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
-    }
-
-    // Step-by-Step Connection & Usage Guide (opened on demand from movable panel or Settings)
-    if (showConnectionGuide) {
-        Scaffold(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(bg),
-            contentWindowInsets = WindowInsets.safeDrawing
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                ConnectionGuideScreen(
-                    settings = appearance,
-                    activeEndpointUrl = telemetry.activeEndpoint,
-                    onUpdateSettings = onUpdateAppearance,
-                    onQuickConnectWebBridge = { hostName, url, token ->
-                        connectAndOpenRemoteHost(hostName, url, token)
-                        showConnectionGuide = false
-                    },
-                    onOpenAppearanceSettings = {
-                        showConnectionGuide = false
-                        showAppearanceSheet = true
-                    },
-                    onCloseGuide = {
-                        showConnectionGuide = false
-                    }
-                )
-            }
-        }
-        return
     }
 
     if (showAppearanceSheet) {
@@ -478,12 +547,7 @@ fun AntigravityPulseApp(
                     onUpdateSettings = onUpdateAppearance,
                     onSelectPreset = onSelectPreset,
                     onResetPreset = onResetPreset,
-                    onOpenConnectionGuide = {
-                        showAppearanceSheet = false
-                        showConnectionGuide = true
-                    },
                     onToggleAutoReconnect = antigravityViewModel::setAutoReconnectEnabled,
-                    onSendTestApprovalNotification = antigravityViewModel::triggerTestApprovalNotification,
                     onClose = { showAppearanceSheet = false }
                 )
             }
@@ -515,8 +579,8 @@ fun AntigravityPulseApp(
             topBar = {
                 AnimatedVisibility(
                     visible = !isBarsHidden,
-                    enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+                    enter = slideInVertically(animationSpec = tween(150), initialOffsetY = { -it }) + fadeIn(tween(150)),
+                    exit = slideOutVertically(animationSpec = tween(150), targetOffsetY = { -it }) + fadeOut(tween(150))
                 ) {
                     Column(
                         modifier = Modifier
@@ -533,6 +597,9 @@ fun AntigravityPulseApp(
                             border = border,
                             accent = accent,
                             onSelectProfile = { profile ->
+                                if (RetainedWebViewManager.isSafeHttpUrl(profile.endpointUrl)) {
+                                    onUpdateAppearance { it.copy(lastActiveRemoteUrl = profile.endpointUrl.trim()) }
+                                }
                                 antigravityViewModel.selectServerProfile(profile)
                                 RetainedWebViewManager.reloadOrForceLoadUrl(
                                     profile.endpointUrl,
@@ -542,13 +609,7 @@ fun AntigravityPulseApp(
                             },
                             onOpenServerModal = { showServerModal = true },
                             onOpenQrScanner = { showGlobalQrScanner = true },
-                            onOpenLiveVoice = { showGlobalLiveVoice = true },
-                            onRecenterLayout = {
-                                RetainedWebViewManager.injectMobileLayoutFix()
-                                antigravityViewModel.recordWebViewBridgeEvent("Re-centered Remote mobile layout")
-                            },
                             onOpenAppearance = { showAppearanceSheet = true },
-                            onOpenGuide = { showConnectionGuide = true },
                             onHideBarsFullscreen = {
                                 onUpdateAppearance { it.copy(isFullscreenBarsHidden = true) }
                             }
@@ -560,8 +621,8 @@ fun AntigravityPulseApp(
             bottomBar = {
                 AnimatedVisibility(
                     visible = !isBarsHidden && !isWideScreen,
-                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+                    enter = slideInVertically(animationSpec = tween(150), initialOffsetY = { it }) + fadeIn(tween(150)),
+                    exit = slideOutVertically(animationSpec = tween(150), targetOffsetY = { it }) + fadeOut(tween(150))
                 ) {
                     Column {
                         HorizontalDivider(color = border, thickness = 1.dp)
@@ -657,10 +718,18 @@ fun AntigravityPulseApp(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 12.dp, vertical = 4.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(EmeraldOnline.copy(alpha = 0.16f))
+                                    .frostedGlass(
+                                        shape = RoundedCornerShape(14.dp),
+                                        baseColor = EmeraldOnline.copy(alpha = 0.18f),
+                                        tintColor = EmeraldOnline,
+                                        borderColor = EmeraldOnline,
+                                        enabled = activeTheme.isFrostedGlassEnabled,
+                                        fillAlpha = 0.26f,
+                                        tintAlpha = 0.10f,
+                                        borderAlpha = 0.45f
+                                    )
                                     .clickable { antigravityViewModel.clearBanner() }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .padding(horizontal = 12.dp, vertical = 7.dp)
                                     .testTag("status_feedback_banner"),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
@@ -684,6 +753,7 @@ fun AntigravityPulseApp(
                             when (PulseTab.entries[safeIndex]) {
                                 PulseTab.WEB_BRIDGE -> RetainedWebViewBridgeScreen(
                                     telemetry = telemetry,
+                                    savedFallbackEndpoint = appearance.lastActiveRemoteUrl,
                                     isFullscreenBarsHidden = isBarsHidden,
                                     onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
                                     onSaveAndConnectUrl = { cleanUrl ->
@@ -697,25 +767,6 @@ fun AntigravityPulseApp(
                                     onJsBridgeEvent = antigravityViewModel::recordWebViewBridgeEvent
                                 )
 
-                                PulseTab.COPILOT -> CopilotAndImageStudioScreen(
-                                    messages = copilotMessages,
-                                    activeEndpointUrl = telemetry.activeEndpoint,
-                                    selectedModel = selectedModel,
-                                    selectedPersona = selectedPersona,
-                                    chatUiState = chatUiState,
-                                    imageUiState = imageUiState,
-                                    selectedInputBitmap = selectedInputBitmap,
-                                    onSelectModel = copilotViewModel::selectModel,
-                                    onSelectPersona = copilotViewModel::selectPersona,
-                                    onSendChatMessage = copilotViewModel::sendChatMessage,
-                                    onForwardToAntigravityAgent = { refinedPrompt ->
-                                        antigravityViewModel.insertPromptIntoRemoteWebView(refinedPrompt)
-                                        selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
-                                    },
-                                    onSetInputBitmap = copilotViewModel::setInputBitmapForEditing,
-                                    onGenerateOrEditImage = copilotViewModel::generateOrEditUiAsset
-                                )
-
                                 PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
                                     dao = dao,
                                     localProfiles = serverProfiles,
@@ -727,13 +778,17 @@ fun AntigravityPulseApp(
                                         selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
                                     },
                                     onOpenAddHostModal = { showServerModal = true },
-                                    onClearLocalData = antigravityViewModel::clearAllLocalWorkspaceData
+                                    onClearLocalData = {
+                                        onUpdateAppearance { it.copy(lastActiveRemoteUrl = "") }
+                                        RetainedWebViewManager.clearSensitiveBrowsingData()
+                                        antigravityViewModel.clearAllLocalWorkspaceData()
+                                    }
                                 )
                             }
                         }
                     }
 
-                    // Movable / Draggable Floating Side Panel (Active by default in Fullscreen Mode)
+                    // Compact Translucent Movable Side Panel (Active by default in Fullscreen Mode)
                     if (isBarsHidden) {
                         MovableFloatingControlPanel(
                             isExpanded = showFloatingQuickMenu,
@@ -760,20 +815,14 @@ fun AntigravityPulseApp(
                             onSelectTab = { index -> selectedTabIndex = index },
                             onOpenHostSwitcher = { showServerModal = true },
                             onOpenQrScanner = { showGlobalQrScanner = true },
-                            onRecenterWebLayout = {
-                                RetainedWebViewManager.injectMobileLayoutFix()
-                                antigravityViewModel.recordWebViewBridgeEvent("Re-centered Antigravity Remote layout")
-                            },
                             onReloadWeb = {
                                 RetainedWebViewManager.reloadCurrentPage()
                                 antigravityViewModel.recordWebViewBridgeEvent("Reloading Antigravity Remote...")
                             },
-                            onOpenLiveVoice = { showGlobalLiveVoice = true },
                             onShowBars = {
                                 onUpdateAppearance { it.copy(isFullscreenBarsHidden = false) }
                             },
-                            onOpenSettings = { showAppearanceSheet = true },
-                            onOpenGuide = { showConnectionGuide = true }
+                            onOpenSettings = { showAppearanceSheet = true }
                         )
                     }
                 }
@@ -839,6 +888,9 @@ fun AntigravityPulseApp(
                                     else elevated
                                 )
                                 .clickable {
+                                    if (RetainedWebViewManager.isSafeHttpUrl(profile.endpointUrl)) {
+                                        onUpdateAppearance { it.copy(lastActiveRemoteUrl = profile.endpointUrl.trim()) }
+                                    }
                                     antigravityViewModel.selectServerProfile(profile)
                                     RetainedWebViewManager.reloadOrForceLoadUrl(
                                         profile.endpointUrl,
@@ -928,7 +980,7 @@ fun AntigravityPulseApp(
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = accent,
-                        contentColor = Color(0xFF070708)
+                        contentColor = Color(0xFF000000)
                     )
                 ) {
                     Text("Save & Connect", fontWeight = FontWeight.Bold)
@@ -968,24 +1020,6 @@ fun AntigravityPulseApp(
             onDismiss = { showGlobalQrScanner = false }
         )
     }
-
-    // Global Pause-Friendly Gemini Live Voice Modal
-    if (showGlobalLiveVoice) {
-        GeminiLiveVoiceModal(
-            activeWorkspaceName = activeProfile?.name ?: "Antigravity Remote",
-            activeEndpointUrl = telemetry.activeEndpoint,
-            onDispatchPromptToAntigravity = { prompt ->
-                antigravityViewModel.insertPromptIntoRemoteWebView(prompt)
-                selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
-                showGlobalLiveVoice = false
-            },
-            onRunRemoteTerminalCommand = { cmd ->
-                antigravityViewModel.insertPromptIntoRemoteWebView(cmd)
-                selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
-            },
-            onDismiss = { showGlobalLiveVoice = false }
-        )
-    }
 }
 
 /**
@@ -1004,10 +1038,7 @@ private fun AntigravityRemoteTopBar(
     onSelectProfile: (ServerProfileEntity) -> Unit,
     onOpenServerModal: () -> Unit,
     onOpenQrScanner: () -> Unit,
-    onOpenLiveVoice: () -> Unit,
-    onRecenterLayout: () -> Unit,
     onOpenAppearance: () -> Unit,
-    onOpenGuide: () -> Unit,
     onHideBarsFullscreen: () -> Unit
 ) {
     var showHostMenu by remember { mutableStateOf(false) }
@@ -1027,7 +1058,7 @@ private fun AntigravityRemoteTopBar(
             Canvas(
                 modifier = Modifier
                     .size(26.dp)
-                    .clickable { onOpenGuide() }
+                    .clickable { onOpenServerModal() }
                     .testTag("antigravity_logo_button")
             ) {
                 val path = Path().apply {
@@ -1059,12 +1090,20 @@ private fun AntigravityRemoteTopBar(
 
             Spacer(modifier = Modifier.width(10.dp))
 
+            val isFrosted = LocalAppearanceSettings.current.isFrostedGlassEnabled
             Box {
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(elevated)
-                        .border(1.dp, border, RoundedCornerShape(10.dp))
+                        .frostedGlass(
+                            shape = RoundedCornerShape(14.dp),
+                            baseColor = elevated,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrosted,
+                            fillAlpha = 0.72f,
+                            tintAlpha = 0.08f,
+                            borderAlpha = 0.55f
+                        )
                         .clickable { showHostMenu = true }
                         .padding(horizontal = 12.dp, vertical = 7.dp)
                         .testTag("top_session_dropdown_pill"),
@@ -1137,18 +1176,11 @@ private fun AntigravityRemoteTopBar(
                             onOpenServerModal()
                         }
                     )
-                    DropdownMenuItem(
-                        text = { Text("How to Connect & Use Guide", color = fg) },
-                        onClick = {
-                            showHostMenu = false
-                            onOpenGuide()
-                        }
-                    )
                 }
             }
         }
 
-        // Right: QR Scan, Live Voice, Re-Center Layout, Appearance Settings, Fullscreen Hide Bars
+        // Right: QR Scan, Settings, Fullscreen Hide Bars
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -1168,34 +1200,6 @@ private fun AntigravityRemoteTopBar(
             }
 
             IconButton(
-                onClick = onOpenLiveVoice,
-                modifier = Modifier
-                    .size(36.dp)
-                    .testTag("top_live_voice_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.GraphicEq,
-                    contentDescription = "Live Voice",
-                    tint = EmeraldOnline,
-                    modifier = Modifier.size(19.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onRecenterLayout,
-                modifier = Modifier
-                    .size(36.dp)
-                    .testTag("top_recenter_layout_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.CenterFocusStrong,
-                    contentDescription = "Re-Center Mobile Layout",
-                    tint = secondaryFg,
-                    modifier = Modifier.size(19.dp)
-                )
-            }
-
-            IconButton(
                 onClick = onOpenAppearance,
                 modifier = Modifier
                     .size(36.dp)
@@ -1203,7 +1207,7 @@ private fun AntigravityRemoteTopBar(
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
-                    contentDescription = "Appearance & Theme Customizer",
+                    contentDescription = "Settings",
                     tint = secondaryFg,
                     modifier = Modifier.size(19.dp)
                 )

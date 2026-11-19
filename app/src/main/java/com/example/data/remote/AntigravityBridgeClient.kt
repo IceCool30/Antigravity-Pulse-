@@ -2,14 +2,20 @@ package com.example.data.remote
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.net.Uri
+import android.net.http.SslError
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.JavascriptInterface
+import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.example.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -688,9 +694,27 @@ object RetainedWebViewManager {
     private var lastLoadedEndpoint: String = "__UNINITIALIZED__"
     private var domLagBoosterActive: Boolean = true
 
+    /**
+     * Activity-registered callback for `<input type="file">` / folder attachment buttons
+     * inside Google Antigravity Remote (e.g., the `+` button).
+     */
+    var onShowFileChooserHandler: ((ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams?) -> Boolean)? = null
+
     fun isSafeHttpUrl(url: String): Boolean {
         val clean = url.trim().lowercase()
         return clean.startsWith("https://") || clean.startsWith("http://")
+    }
+
+    fun hasActiveLoadedSession(): Boolean = isSafeHttpUrl(lastLoadedEndpoint)
+
+    fun currentLoadedEndpoint(): String =
+        if (isSafeHttpUrl(lastLoadedEndpoint)) lastLoadedEndpoint else ""
+
+    fun flushCookies() {
+        try {
+            CookieManager.getInstance().flush()
+        } catch (_: Exception) {
+        }
     }
 
     fun buildCleanMobileUserAgent(rawUserAgent: String): String {
@@ -710,23 +734,47 @@ object RetainedWebViewManager {
         domLagBoosterActive = domLagBooster
         val appContext = context.applicationContext
         val webView = pinnedWebView ?: WebView(appContext).apply {
+            // Never allow remote Chrome DevTools inspection in release builds
+            try {
+                WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+            } catch (_: Exception) {
+            }
+
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(android.graphics.Color.parseColor("#070708"))
+            setBackgroundColor(android.graphics.Color.BLACK)
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             setInitialScale(0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    // Keep the WebView renderer high-priority so scrolling & resume stay instant
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+                } catch (_: Exception) {
+                }
+            }
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
                 databaseEnabled = true
                 allowFileAccess = false
-                allowContentAccess = false
+                @Suppress("DEPRECATION")
+                allowFileAccessFromFileURLs = false
+                @Suppress("DEPRECATION")
+                allowUniversalAccessFromFileURLs = false
+                @Suppress("DEPRECATION")
+                saveFormData = false
+                // Required so WebView can read content:// URIs returned by Android's system file picker
+                allowContentAccess = true
                 cacheMode = WebSettings.LOAD_DEFAULT
-                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                // Strictly block active HTTP mixed-content injection inside HTTPS sessions
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    safeBrowsingEnabled = true
+                }
                 useWideViewPort = true
                 loadWithOverviewMode = false
                 layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
@@ -737,32 +785,51 @@ object RetainedWebViewManager {
                 mediaPlaybackRequiresUserGesture = false
                 userAgentString = buildCleanMobileUserAgent(userAgentString.orEmpty())
             }
-            addJavascriptInterface(
-                object {
-                    @JavascriptInterface
-                    fun postNativeAction(actionJson: String) {
-                        val safeJson = actionJson.take(AntigravityBridgeClient.MAX_BRIDGE_PAYLOAD_CHARS)
-                        onJsBridgeMessage(safeJson)
+            try {
+                val cookieManager = CookieManager.getInstance()
+                cookieManager.setAcceptCookie(true)
+                cookieManager.setAcceptThirdPartyCookies(this, true)
+            } catch (_: Exception) {
+            }
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    if (filePathCallback == null) return false
+                    val handler = onShowFileChooserHandler
+                    if (handler != null) {
+                        return handler(filePathCallback, fileChooserParams)
                     }
-                },
-                "AntigravityNativeBridge"
-            )
-            webChromeClient = WebChromeClient()
+                    filePathCallback.onReceiveValue(null)
+                    return false
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?
                 ): Boolean {
                     val targetUrl = request?.url?.toString().orEmpty()
-                    // Block non-HTTP(S) schemes (e.g., file://, content://, javascript:, intent:)
+                    // Block non-HTTP(S) schemes (e.g., file://, content://, javascript:, intent:, data:)
                     return !isSafeHttpUrl(targetUrl)
+                }
+
+                override fun onReceivedSslError(
+                    view: WebView?,
+                    handler: SslErrorHandler?,
+                    error: SslError?
+                ) {
+                    // Zero-trust: strictly reject invalid/MITM TLS certificates (never call proceed())
+                    handler?.cancel()
+                    onJsBridgeMessage("Blocked untrusted SSL certificate for your protection.")
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
+                    flushCookies()
                     injectMobileLayoutFix(view)
-                    // Re-apply after SPA hydration to prevent late horizontal layout shift
-                    view?.postDelayed({ injectMobileLayoutFix(view) }, 450L)
                     if (domLagBoosterActive) {
                         injectDomLagOptimizer(view)
                     } else {
@@ -776,11 +843,18 @@ object RetainedWebViewManager {
         (webView.parent as? ViewGroup)?.removeView(webView)
 
         val cleanEndpoint = endpointUrl.trim()
-        if (lastLoadedEndpoint != cleanEndpoint) {
-            lastLoadedEndpoint = cleanEndpoint
-            if (isSafeHttpUrl(cleanEndpoint)) {
-                webView.loadUrl(cleanEndpoint)
-            } else {
+        when {
+            isSafeHttpUrl(cleanEndpoint) -> {
+                if (lastLoadedEndpoint != cleanEndpoint) {
+                    lastLoadedEndpoint = cleanEndpoint
+                    webView.loadUrl(cleanEndpoint)
+                }
+            }
+            // Never overwrite an already-active pinned remote session with the welcome screen
+            // while Room is asynchronously restoring saved profiles after biometric unlock or resume.
+            isSafeHttpUrl(lastLoadedEndpoint) -> Unit
+            lastLoadedEndpoint != "__WELCOME__" -> {
+                lastLoadedEndpoint = "__WELCOME__"
                 webView.loadDataWithBaseURL(
                     "https://antigravity.local",
                     buildEmptyWebBridgeNoticeHtml(),
@@ -793,21 +867,54 @@ object RetainedWebViewManager {
         return webView
     }
 
+    /**
+     * Loads [url] if the pinned WebView is still on the welcome screen or a different host,
+     * without ever reloading an already-loaded active session.
+     */
+    fun ensureUrlLoadedIfIdle(url: String, domLagBooster: Boolean) {
+        domLagBoosterActive = domLagBooster
+        val cleanUrl = url.trim()
+        if (!isSafeHttpUrl(cleanUrl)) return
+        val webView = pinnedWebView ?: return
+        if (lastLoadedEndpoint != cleanUrl) {
+            lastLoadedEndpoint = cleanUrl
+            webView.loadUrl(cleanUrl)
+        }
+    }
+
+    fun resetToWelcomeScreen() {
+        lastLoadedEndpoint = "__WELCOME__"
+        val webView = pinnedWebView ?: return
+        webView.loadDataWithBaseURL(
+            "https://antigravity.local",
+            buildEmptyWebBridgeNoticeHtml(),
+            "text/html",
+            "UTF-8",
+            null
+        )
+    }
+
+    fun clearSensitiveBrowsingData() {
+        try {
+            pinnedWebView?.clearCache(true)
+            pinnedWebView?.clearHistory()
+            pinnedWebView?.clearFormData()
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+        } catch (_: Exception) {
+        }
+        resetToWelcomeScreen()
+    }
+
     fun reloadOrForceLoadUrl(url: String, domLagBooster: Boolean) {
         domLagBoosterActive = domLagBooster
         val webView = pinnedWebView ?: return
         val cleanUrl = url.trim()
-        lastLoadedEndpoint = cleanUrl
         if (isSafeHttpUrl(cleanUrl)) {
+            lastLoadedEndpoint = cleanUrl
             webView.loadUrl(cleanUrl)
         } else {
-            webView.loadDataWithBaseURL(
-                "https://antigravity.local",
-                buildEmptyWebBridgeNoticeHtml(),
-                "text/html",
-                "UTF-8",
-                null
-            )
+            resetToWelcomeScreen()
         }
     }
 
@@ -996,29 +1103,59 @@ object RetainedWebViewManager {
                 * { box-sizing: border-box; }
                 html, body {
                   margin: 0; padding: 24px 18px; width: 100%; max-width: 100vw; overflow-x: hidden;
-                  background: #070708; color: #FFFFFF;
+                  background: #000000; color: #FFFFFF;
                   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                   display: flex; flex-direction: column; align-items: center; justify-content: center;
-                  min-height: 82vh; text-align: center;
+                  min-height: 84vh; text-align: left;
                 }
                 .box {
-                  width: 100%; max-width: 400px; background: #111114; border: 1px solid #26262B;
-                  border-radius: 18px; padding: 24px;
+                  width: 100%; max-width: 390px; background: #0A0A0D; border: 1px solid #202026;
+                  border-radius: 20px; padding: 24px 22px;
                 }
-                h3 { margin: 0 0 10px 0; color: #FFC799; font-size: 18px; }
-                p { margin: 0; color: #A1A1AA; font-size: 14px; line-height: 1.55; }
+                .badge {
+                  display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+                  text-transform: uppercase; color: #FFC799; background: rgba(255, 199, 153, 0.12);
+                  border: 1px solid rgba(255, 199, 153, 0.28); border-radius: 999px;
+                  padding: 4px 10px; margin-bottom: 12px;
+                }
+                h3 { margin: 0 0 8px 0; color: #FFFFFF; font-size: 20px; font-weight: 700; }
+                p.lead { margin: 0 0 18px 0; color: #A1A1AA; font-size: 13.5px; line-height: 1.5; }
+                .step {
+                  display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px;
+                }
+                .num {
+                  flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+                  background: rgba(255, 199, 153, 0.16); color: #FFC799;
+                  font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+                  margin-top: 1px;
+                }
+                .step-text { color: #D4D4D8; font-size: 13px; line-height: 1.48; }
+                .step-text strong { color: #FFFFFF; }
                 .hint {
-                  margin-top: 14px; padding: 10px 12px; border-radius: 12px;
-                  background: rgba(255, 199, 153, 0.10); border: 1px solid rgba(255, 199, 153, 0.30);
-                  color: #FFC799; font-size: 12.5px;
+                  margin-top: 16px; padding: 10px 12px; border-radius: 12px;
+                  background: rgba(255, 199, 153, 0.08); border: 1px solid rgba(255, 199, 153, 0.24);
+                  color: #FFC799; font-size: 12px; line-height: 1.45;
                 }
               </style>
             </head>
             <body>
               <div class="box">
-                <h3>Antigravity Remote Ready</h3>
-                <p>Tap the floating side control handle to <strong>Scan QR Code</strong> or <strong>Connect Remote URL</strong>. Your session stays pinned in Android RAM with zero reloads.</p>
-                <div class="hint">Tip: Drag the floating control handle anywhere on screen to reposition it.</div>
+                <div class="badge">Antigravity Pulse</div>
+                <h3>Welcome</h3>
+                <p class="lead">Connect your phone to your remote session in seconds with fullscreen controls and zero-reload RAM pinning.</p>
+                <div class="step">
+                  <div class="num">1</div>
+                  <div class="step-text">Tap the translucent <strong>side handle</strong> to <strong>Scan QR Code</strong> or paste your <strong>Remote URL</strong>.</div>
+                </div>
+                <div class="step">
+                  <div class="num">2</div>
+                  <div class="step-text"><strong>Drag the side handle</strong> anywhere on screen to reposition it—dock it to either edge or float it freely.</div>
+                </div>
+                <div class="step">
+                  <div class="num">3</div>
+                  <div class="step-text">Use the <strong>+</strong> button inside your session to attach files directly from phone storage, and <strong>Cloud Sync</strong> to back up hosts.</div>
+                </div>
+                <div class="hint">Tip: Open Settings from the side handle to customize themes, biometric lock, and developer profile.</div>
               </div>
             </body>
             </html>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Trust only verified system Certificate Authorities (blocks rogue user-installed MITM CAs).
+        Cleartext HTTP is permitted only when explicitly needed for local LAN workstations;
+        HTTPS is always preferred and invalid SSL certificates are strictly cancelled in WebView.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

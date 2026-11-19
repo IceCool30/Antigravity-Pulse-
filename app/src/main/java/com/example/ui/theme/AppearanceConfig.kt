@@ -28,7 +28,7 @@ data class AntigravityThemePreset(
 val OfficialAntigravityPresets = listOf(
     AntigravityThemePreset(
         name = "Default Dark",
-        backgroundHex = "#070708",
+        backgroundHex = "#000000",
         foregroundHex = "#FFFFFF",
         accentHex = "#FFC799"
     ),
@@ -117,7 +117,7 @@ data class AppearanceSettings(
     val fontFamilyName: String = "Google Sans",
     val fontSizePx: Int = 14,
     val presetName: String = "Default Dark",
-    val backgroundHex: String = "#070708",
+    val backgroundHex: String = "#000000",
     val foregroundHex: String = "#FFFFFF",
     val accentHex: String = "#FFC799",
     val isFullscreenBarsHidden: Boolean = true,
@@ -127,13 +127,19 @@ data class AppearanceSettings(
     val isAutoReconnectEnabled: Boolean = true,
     val savedTerminalMacros: List<String> = emptyList(),
     val floatingHandleXFraction: Float = 0f,
-    val floatingHandleYFraction: Float = 0.42f
+    val floatingHandleYFraction: Float = 0.42f,
+    val developerName: String = "Solomon Ogar Bukie",
+    val developerEmail: String = "solomonogarbukie@gmail.com",
+    val developerGithub: String = "IceCool30",
+    val lastActiveRemoteUrl: String = "",
+    val isMaterialYouDynamicEnabled: Boolean = true,
+    val isFrostedGlassEnabled: Boolean = true
 ) {
     val backgroundColor: Color
         get() = if (themeMode == AntigravityThemeMode.LIGHT) {
             Color(0xFFF8FAFC)
         } else {
-            parseHexColor(backgroundHex, Color(0xFF070708))
+            parseHexColor(backgroundHex, Color(0xFF000000))
         }
 
     val surfaceColor: Color
@@ -223,7 +229,7 @@ class AppearancePreferencesManager(context: Context) {
             fontFamilyName = prefs.getString("font_family", "Google Sans") ?: "Google Sans",
             fontSizePx = prefs.getInt("font_size_px", 14),
             presetName = prefs.getString("preset_name", "Default Dark") ?: "Default Dark",
-            backgroundHex = prefs.getString("bg_hex", "#070708") ?: "#070708",
+            backgroundHex = prefs.getString("bg_hex_v2", "#000000") ?: "#000000",
             foregroundHex = prefs.getString("fg_hex", "#FFFFFF") ?: "#FFFFFF",
             accentHex = prefs.getString("accent_hex", "#FFC799") ?: "#FFC799",
             isFullscreenBarsHidden = prefs.getBoolean("fullscreen_bars_hidden_v2", true),
@@ -233,7 +239,13 @@ class AppearancePreferencesManager(context: Context) {
             isAutoReconnectEnabled = prefs.getBoolean("auto_reconnect_enabled", true),
             savedTerminalMacros = parsedMacros,
             floatingHandleXFraction = prefs.getFloat("floating_handle_x_fraction", 0f).coerceIn(0f, 1f),
-            floatingHandleYFraction = prefs.getFloat("floating_handle_y_fraction", 0.42f).coerceIn(0f, 1f)
+            floatingHandleYFraction = prefs.getFloat("floating_handle_y_fraction", 0.42f).coerceIn(0f, 1f),
+            developerName = prefs.getString("developer_name", "Solomon Ogar Bukie") ?: "Solomon Ogar Bukie",
+            developerEmail = prefs.getString("developer_email", "solomonogarbukie@gmail.com") ?: "solomonogarbukie@gmail.com",
+            developerGithub = prefs.getString("developer_github_v2", "IceCool30") ?: "IceCool30",
+            lastActiveRemoteUrl = prefs.getString("last_active_remote_url", "") ?: "",
+            isMaterialYouDynamicEnabled = prefs.getBoolean("material_you_dynamic_enabled", true),
+            isFrostedGlassEnabled = prefs.getBoolean("frosted_glass_enabled", true)
         )
     }
 
@@ -246,7 +258,7 @@ class AppearancePreferencesManager(context: Context) {
             .putString("font_family", next.fontFamilyName)
             .putInt("font_size_px", next.fontSizePx)
             .putString("preset_name", next.presetName)
-            .putString("bg_hex", next.backgroundHex)
+            .putString("bg_hex_v2", next.backgroundHex)
             .putString("fg_hex", next.foregroundHex)
             .putString("accent_hex", next.accentHex)
             .putBoolean("fullscreen_bars_hidden_v2", next.isFullscreenBarsHidden)
@@ -257,6 +269,12 @@ class AppearancePreferencesManager(context: Context) {
             .putString("saved_terminal_macros", next.savedTerminalMacros.joinToString("\n"))
             .putFloat("floating_handle_x_fraction", next.floatingHandleXFraction.coerceIn(0f, 1f))
             .putFloat("floating_handle_y_fraction", next.floatingHandleYFraction.coerceIn(0f, 1f))
+            .putString("developer_name", next.developerName)
+            .putString("developer_email", next.developerEmail)
+            .putString("developer_github_v2", next.developerGithub)
+            .putString("last_active_remote_url", next.lastActiveRemoteUrl)
+            .putBoolean("material_you_dynamic_enabled", next.isMaterialYouDynamicEnabled)
+            .putBoolean("frosted_glass_enabled", next.isFrostedGlassEnabled)
             .apply()
     }
 
@@ -266,7 +284,8 @@ class AppearancePreferencesManager(context: Context) {
                 presetName = preset.name,
                 backgroundHex = preset.backgroundHex,
                 foregroundHex = preset.foregroundHex,
-                accentHex = preset.accentHex
+                accentHex = preset.accentHex,
+                isMaterialYouDynamicEnabled = false
             )
         }
     }

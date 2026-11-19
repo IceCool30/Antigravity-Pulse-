@@ -78,6 +78,7 @@ import com.example.data.local.ServerProfileEntity
 import com.example.ui.theme.CrimsonError
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
+import com.example.ui.theme.frostedGlass
 import com.example.viewmodel.AuthenticatedCloudSyncViewModel
 import com.example.viewmodel.CloudUiState
 import com.google.firebase.Firebase
@@ -103,6 +104,7 @@ fun StorageAndCloudSyncScreen(
     val fg = appearance.foregroundColor
     val secondaryFg = appearance.secondaryTextColor
     val accent = appearance.accentColor
+    val isFrostedGlass = appearance.isFrostedGlassEnabled
 
     val scope = rememberCoroutineScope()
     val credentialManager = remember { CredentialManager.create(context) }
@@ -175,12 +177,22 @@ fun StorageAndCloudSyncScreen(
     ) {
         // 1. Saved Local Remote Hosts (Room SQLite — Always Ready)
         item {
+            val hostCardShape = RoundedCornerShape(20.dp)
             Card(
-                colors = CardDefaults.cardColors(containerColor = surface),
-                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                shape = hostCardShape,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, EmeraldOnline.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+                    .frostedGlass(
+                        shape = hostCardShape,
+                        baseColor = surface,
+                        tintColor = EmeraldOnline,
+                        borderColor = EmeraldOnline.copy(alpha = 0.55f),
+                        enabled = isFrostedGlass,
+                        fillAlpha = 0.82f,
+                        tintAlpha = 0.06f,
+                        borderAlpha = 0.58f
+                    )
                     .testTag("local_room_storage_card")
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
@@ -304,12 +316,22 @@ fun StorageAndCloudSyncScreen(
         item {
             val user = currentUser
             if (user == null) {
+                val authCardShape = RoundedCornerShape(20.dp)
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = surface),
-                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                    shape = authCardShape,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, border, RoundedCornerShape(14.dp))
+                        .frostedGlass(
+                            shape = authCardShape,
+                            baseColor = surface,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrostedGlass,
+                            fillAlpha = 0.82f,
+                            tintAlpha = 0.07f,
+                            borderAlpha = 0.60f
+                        )
                         .testTag("cloud_auth_card")
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
@@ -452,14 +474,25 @@ private fun AuthenticatedCloudSyncPanel(
     var newPromptBody by rememberSaveable { mutableStateOf("") }
     var showAddPromptForm by rememberSaveable { mutableStateOf(false) }
 
+    val isFrostedGlass = LocalAppearanceSettings.current.isFrostedGlassEnabled
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // Card A: Cloud Account & Synced Remote Hosts
+        val cloudCardShape = RoundedCornerShape(20.dp)
         Card(
-            colors = CardDefaults.cardColors(containerColor = surface),
-            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+            shape = cloudCardShape,
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                .frostedGlass(
+                    shape = cloudCardShape,
+                    baseColor = surface,
+                    tintColor = accent,
+                    borderColor = accent.copy(alpha = 0.55f),
+                    enabled = isFrostedGlass,
+                    fillAlpha = 0.82f,
+                    tintAlpha = 0.07f,
+                    borderAlpha = 0.60f
+                )
                 .testTag("authenticated_cloud_panel")
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
@@ -646,12 +679,22 @@ private fun AuthenticatedCloudSyncPanel(
         }
 
         // Card B: Cloud-Synced Reusable Prompts Library (1-Tap Insert into Remote WebView!)
+        val promptCardShape = RoundedCornerShape(20.dp)
         Card(
-            colors = CardDefaults.cardColors(containerColor = surface),
-            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+            shape = promptCardShape,
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, border, RoundedCornerShape(14.dp))
+                .frostedGlass(
+                    shape = promptCardShape,
+                    baseColor = surface,
+                    tintColor = accent,
+                    borderColor = border,
+                    enabled = isFrostedGlass,
+                    fillAlpha = 0.82f,
+                    tintAlpha = 0.06f,
+                    borderAlpha = 0.58f
+                )
                 .testTag("cloud_prompt_library_card")
         ) {
             Column(modifier = Modifier.padding(14.dp)) {

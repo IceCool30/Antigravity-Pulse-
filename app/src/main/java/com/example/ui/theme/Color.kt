@@ -2,11 +2,11 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Precision Obsidian IDE Palette
-val ObsidianBackground = Color(0xFF0B0E14)
-val CarbonSurface = Color(0xFF131822)
-val GraphiteElevated = Color(0xFF1C2331)
-val SlateBorder = Color(0xFF283246)
+// Pure OLED Obsidian Palette
+val ObsidianBackground = Color(0xFF000000)
+val CarbonSurface = Color(0xFF0D0D10)
+val GraphiteElevated = Color(0xFF17171C)
+val SlateBorder = Color(0xFF26262E)
 
 val ElectricCyan = Color(0xFF38BDF8)
 val ElectricCyanDim = Color(0xFF0284C7)

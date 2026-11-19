@@ -1,10 +1,8 @@
 package com.example.ui.screens
 
-import android.Manifest
-import android.os.Build
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,15 +26,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -75,7 +77,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.example.data.remote.ApprovalNotificationHelper
 import com.example.ui.theme.AntigravityContrastMode
 import com.example.ui.theme.AntigravityThemeMode
 import com.example.ui.theme.AntigravityThemePreset
@@ -83,7 +84,9 @@ import com.example.ui.theme.AppearanceSettings
 import com.example.ui.theme.AvailableAntigravityFonts
 import com.example.ui.theme.AvailableFontSizesPx
 import com.example.ui.theme.JetBrainsMonoFontFamily
+import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.OfficialAntigravityPresets
+import com.example.ui.theme.frostedGlass
 import com.example.ui.theme.parseHexColor
 
 @Composable
@@ -92,31 +95,27 @@ fun AppearanceSettingsSheet(
     onUpdateSettings: ((AppearanceSettings) -> AppearanceSettings) -> Unit,
     onSelectPreset: (AntigravityThemePreset) -> Unit,
     onResetPreset: () -> Unit,
-    onOpenConnectionGuide: () -> Unit,
     onToggleAutoReconnect: (Boolean) -> Unit = {},
-    onSendTestApprovalNotification: () -> Unit = {},
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
     val context = LocalContext.current
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        onUpdateSettings { it.copy(isApprovalNotificationsEnabled = granted) }
-    }
 
-    val bg = settings.backgroundColor
-    val surface = settings.surfaceColor
-    val elevated = settings.elevatedSurfaceColor
-    val border = settings.borderColor
-    val fg = settings.foregroundColor
-    val secondaryFg = settings.secondaryTextColor
-    val accent = settings.accentColor
+    val activeTheme = LocalAppearanceSettings.current
+    val bg = activeTheme.backgroundColor
+    val surface = activeTheme.surfaceColor
+    val elevated = activeTheme.elevatedSurfaceColor
+    val border = activeTheme.borderColor
+    val fg = activeTheme.foregroundColor
+    val secondaryFg = activeTheme.secondaryTextColor
+    val accent = activeTheme.accentColor
+    val isFrostedGlass = activeTheme.isFrostedGlassEnabled
 
     var showPresetPickerDialog by rememberSaveable { mutableStateOf(false) }
     var showFontDropdown by remember { mutableStateOf(false) }
     var showFontSizeDropdown by remember { mutableStateOf(false) }
     var isCodePreviewExpanded by rememberSaveable { mutableStateOf(true) }
+    var showEditDeveloperDialog by rememberSaveable { mutableStateOf(false) }
 
     // Hex Color Editor state ("Background", "Foreground", or "Accent")
     var editingColorField by rememberSaveable { mutableStateOf<String?>(null) }
@@ -172,17 +171,12 @@ fun AppearanceSettingsSheet(
                     )
                 }
 
-                TextButton(
-                    onClick = onOpenConnectionGuide,
-                    modifier = Modifier.testTag("settings_header_guide_button")
-                ) {
-                    Text(
-                        text = "Step-by-Step Guide",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = accent
-                    )
-                }
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = fg
+                )
             }
             HorizontalDivider(color = border, thickness = 1.dp)
         }
@@ -208,9 +202,16 @@ fun AppearanceSettingsSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(surface)
-                        .border(1.dp, border, RoundedCornerShape(18.dp))
+                        .frostedGlass(
+                            shape = RoundedCornerShape(20.dp),
+                            baseColor = surface,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrostedGlass,
+                            fillAlpha = 0.82f,
+                            tintAlpha = 0.06f,
+                            borderAlpha = 0.58f
+                        )
                 ) {
                     // Row 1: Theme [ System | Light | Dark ]
                     Row(
@@ -494,6 +495,98 @@ fun AppearanceSettingsSheet(
                             modifier = Modifier.testTag("fullscreen_bars_switch")
                         )
                     }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Row 6: Material You Dynamic Color (Android 12+ Wallpaper Accent + Pure OLED Black)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Palette,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Material You Dynamic Color",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Adapt accent color from your wallpaper while keeping pure #000000 OLED dark",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+
+                        Switch(
+                            checked = settings.isMaterialYouDynamicEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(isMaterialYouDynamicEnabled = enabled) }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = bg,
+                                checkedTrackColor = accent
+                            ),
+                            modifier = Modifier.testTag("material_you_toggle")
+                        )
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Row 7: Subtle Frosted Glass Surfaces
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Frosted Glass Surfaces",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Subtle translucent glass sheen on panels, cards & floating controls",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+
+                        Switch(
+                            checked = settings.isFrostedGlassEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(isFrostedGlassEnabled = enabled) }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = bg,
+                                checkedTrackColor = accent
+                            ),
+                            modifier = Modifier.testTag("frosted_glass_toggle")
+                        )
+                    }
                 }
             }
 
@@ -510,9 +603,16 @@ fun AppearanceSettingsSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(surface)
-                        .border(1.dp, border, RoundedCornerShape(18.dp))
+                        .frostedGlass(
+                            shape = RoundedCornerShape(20.dp),
+                            baseColor = surface,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrostedGlass,
+                            fillAlpha = 0.82f,
+                            tintAlpha = 0.06f,
+                            borderAlpha = 0.58f
+                        )
                 ) {
                     // Biometric App Lock
                     Row(
@@ -555,81 +655,6 @@ fun AppearanceSettingsSheet(
                             ),
                             modifier = Modifier.testTag("biometric_lock_switch")
                         )
-                    }
-
-                    HorizontalDivider(color = border, thickness = 1.dp)
-
-                    // Background Step Approval Notifications
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.NotificationsActive,
-                                        contentDescription = null,
-                                        tint = accent,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Approval Notifications",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = fg
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "Approve & Run or Reject queued agent steps directly from the notification shade",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = secondaryFg
-                                )
-                            }
-                            Switch(
-                                checked = settings.isApprovalNotificationsEnabled,
-                                onCheckedChange = { enabled ->
-                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                        !ApprovalNotificationHelper.hasNotificationPermission(context)
-                                    ) {
-                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    } else {
-                                        onUpdateSettings { it.copy(isApprovalNotificationsEnabled = enabled) }
-                                    }
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = bg,
-                                    checkedTrackColor = accent
-                                ),
-                                modifier = Modifier.testTag("approval_notifications_switch")
-                            )
-                        }
-
-                        if (settings.isApprovalNotificationsEnabled) {
-                            OutlinedButton(
-                                onClick = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                        !ApprovalNotificationHelper.hasNotificationPermission(context)
-                                    ) {
-                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    } else {
-                                        onSendTestApprovalNotification()
-                                    }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("send_test_approval_notification_button")
-                            ) {
-                                Text("Send Test Step Approval Notification", color = accent)
-                            }
-                        }
                     }
 
                     HorizontalDivider(color = border, thickness = 1.dp)
@@ -693,9 +718,16 @@ fun AppearanceSettingsSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(surface)
-                        .border(1.dp, border, RoundedCornerShape(18.dp))
+                        .frostedGlass(
+                            shape = RoundedCornerShape(20.dp),
+                            baseColor = surface,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrostedGlass,
+                            fillAlpha = 0.82f,
+                            tintAlpha = 0.06f,
+                            borderAlpha = 0.58f
+                        )
                 ) {
                     // Row 1: Preset [ ↺ ] [ Default Dark v ]
                     Row(
@@ -891,15 +923,258 @@ fun AppearanceSettingsSheet(
                 }
             }
 
-            // SECTION 3: Complete Step-by-Step Connection & Usage Guide directly inside Settings
+            // SECTION 3: About Developer (Clean, Professional Attribution Card)
             item {
-                SettingsEmbeddedGuideSection(
-                    settings = settings,
-                    onUpdateSettings = onUpdateSettings,
-                    onOpenFullInteractiveGuide = onOpenConnectionGuide
-                )
+                val initials = remember(settings.developerName) {
+                    settings.developerName
+                        .trim()
+                        .split(Regex("\\s+"))
+                        .filter { it.isNotEmpty() }
+                        .take(2)
+                        .joinToString("") { it.first().uppercase() }
+                        .ifBlank { "DV" }
+                }
+                val cleanGithubHandle = settings.developerGithub.trim().removePrefix("@")
+
+                Column {
+                    Text(
+                        text = "About Developer",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = fg,
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .frostedGlass(
+                                shape = RoundedCornerShape(20.dp),
+                                baseColor = surface,
+                                tintColor = accent,
+                                borderColor = border,
+                                enabled = isFrostedGlass,
+                                fillAlpha = 0.82f,
+                                tintAlpha = 0.07f,
+                                borderAlpha = 0.60f
+                            )
+                            .padding(16.dp)
+                            .testTag("about_developer_card"),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(accent.copy(alpha = 0.16f))
+                                        .border(1.2.dp, accent.copy(alpha = 0.55f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = initials,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = accent
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = settings.developerName,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = fg
+                                    )
+                                    Text(
+                                        text = "Developer • Antigravity Pulse v1.0",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = secondaryFg
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { showEditDeveloperDialog = true },
+                                modifier = Modifier.testTag("edit_developer_profile_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit Developer Info",
+                                    tint = secondaryFg,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = border, thickness = 1.dp)
+
+                        // Email row (opens mail client)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(elevated)
+                                .clickable {
+                                    try {
+                                        val intent = Intent(
+                                            Intent.ACTION_SENDTO,
+                                            Uri.parse("mailto:${settings.developerEmail.trim()}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {
+                                    }
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .testTag("developer_email_row"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Email,
+                                contentDescription = "Developer Email",
+                                tint = accent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Email",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = secondaryFg
+                                )
+                                Text(
+                                    text = settings.developerEmail,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = fg
+                                )
+                            }
+                        }
+
+                        // GitHub row (opens GitHub profile in browser)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(elevated)
+                                .clickable {
+                                    if (cleanGithubHandle.isNotBlank()) {
+                                        try {
+                                            val intent = Intent(
+                                                Intent.ACTION_VIEW,
+                                                Uri.parse("https://github.com/$cleanGithubHandle")
+                                            )
+                                            context.startActivity(intent)
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .testTag("developer_github_row"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Code,
+                                contentDescription = "Developer GitHub",
+                                tint = accent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "GitHub",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = secondaryFg
+                                )
+                                Text(
+                                    text = "@$cleanGithubHandle",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = accent,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    // Modal: Edit Developer Attribution Details
+    if (showEditDeveloperDialog) {
+        var devNameInput by remember(settings.developerName) { mutableStateOf(settings.developerName) }
+        var devEmailInput by remember(settings.developerEmail) { mutableStateOf(settings.developerEmail) }
+        var devGithubInput by remember(settings.developerGithub) { mutableStateOf(settings.developerGithub) }
+
+        AlertDialog(
+            onDismissRequest = { showEditDeveloperDialog = false },
+            containerColor = surface,
+            title = {
+                Text(
+                    text = "Developer Details",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = fg
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = devNameInput,
+                        onValueChange = { devNameInput = it },
+                        label = { Text("Full Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = devEmailInput,
+                        onValueChange = { devEmailInput = it },
+                        label = { Text("Email Address") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = devGithubInput,
+                        onValueChange = { devGithubInput = it.removePrefix("@") },
+                        label = { Text("GitHub Username") },
+                        prefix = { Text("@") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onUpdateSettings {
+                            it.copy(
+                                developerName = devNameInput.trim().ifBlank { it.developerName },
+                                developerEmail = devEmailInput.trim().ifBlank { it.developerEmail },
+                                developerGithub = devGithubInput.trim().removePrefix("@").ifBlank { it.developerGithub }
+                            )
+                        }
+                        showEditDeveloperDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = accent,
+                        contentColor = Color(0xFF000000)
+                    )
+                ) {
+                    Text("Save", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDeveloperDialog = false }) {
+                    Text("Cancel", color = secondaryFg)
+                }
+            }
+        )
     }
 
     // Modal 1: Full-Height Radio-Button Preset Picker matching Screenshot 4 (`Screenshot_20261118-112636_62bed107.jpg`)
@@ -984,7 +1259,7 @@ fun AppearanceSettingsSheet(
         }
 
         val quickSwatches = when (fieldName) {
-            "Background" -> listOf("#070708", "#0B0E14", "#101010", "#1E1E2E", "#282A36", "#1A1B26")
+            "Background" -> listOf("#000000", "#070708", "#0B0E14", "#101010", "#1E1E2E", "#282A36")
             "Foreground" -> listOf("#FFFFFF", "#F1F5F9", "#CDD6F4", "#D3C6AA", "#ECEFF4", "#C0CAF5")
             else -> listOf("#FFC799", "#38BDF8", "#CBA6F7", "#BD93F9", "#A7C080", "#E78A4E", "#A6E22E", "#88C0D0")
         }
@@ -1052,7 +1327,10 @@ fun AppearanceSettingsSheet(
                             when (fieldName) {
                                 "Background" -> current.copy(backgroundHex = formatted)
                                 "Foreground" -> current.copy(foregroundHex = formatted)
-                                else -> current.copy(accentHex = formatted)
+                                else -> current.copy(
+                                    accentHex = formatted,
+                                    isMaterialYouDynamicEnabled = false
+                                )
                             }
                         }
                         editingColorField = null

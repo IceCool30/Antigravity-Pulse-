@@ -22,14 +22,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
@@ -52,9 +49,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,6 +61,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.EmeraldOnline
+import com.example.ui.theme.LocalAppearanceSettings
+import com.example.ui.theme.frostedGlass
 import kotlin.math.roundToInt
 
 data class FloatingPanelTabItem(
@@ -72,13 +73,11 @@ data class FloatingPanelTabItem(
 )
 
 /**
- * Movable / Draggable Floating Control Handle & Expanded Side Panel.
+ * Compact, translucent, movable floating handle & expanded control panel.
  *
- * - Users can drag the collapsed handle OR drag the open panel's header bar to ANY (x, y)
- *   position on screen (left edge, right edge, top, bottom, or floating anywhere).
- * - Position is normalized to fractions [0f..1f] and persisted via [onPersistPositionFraction]
- *   so it stays exactly where the user placed it across rotations and app restarts.
- * - Expanded panel is automatically clamped within container bounds so it is never clipped.
+ * - Docked to left/right edge: sleek sidebar-tab shape.
+ * - Moved anywhere else on screen: compact rounded floating pill.
+ * - Position persists as normalized fractions [0f..1f] across restarts.
  */
 @Composable
 fun MovableFloatingControlPanel(
@@ -99,24 +98,23 @@ fun MovableFloatingControlPanel(
     onSelectTab: (Int) -> Unit,
     onOpenHostSwitcher: () -> Unit,
     onOpenQrScanner: () -> Unit,
-    onRecenterWebLayout: () -> Unit,
     onReloadWeb: () -> Unit,
-    onOpenLiveVoice: () -> Unit,
     onShowBars: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenGuide: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(
         modifier = modifier.fillMaxSize()
     ) {
         val density = LocalDensity.current
+        val haptic = LocalHapticFeedback.current
+        val isFrostedGlass = LocalAppearanceSettings.current.isFrostedGlassEnabled
         val containerWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
         val containerHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
         val edgeMarginPx = with(density) { 8.dp.toPx() }
 
-        val defaultHandleWidthPx = with(density) { 48.dp.toPx() }
-        val defaultHandleHeightPx = with(density) { 54.dp.toPx() }
+        val defaultHandleWidthPx = with(density) { 38.dp.toPx() }
+        val defaultHandleHeightPx = with(density) { 40.dp.toPx() }
 
         var handleSize by remember {
             mutableStateOf(IntSize(defaultHandleWidthPx.roundToInt(), defaultHandleHeightPx.roundToInt()))
@@ -124,8 +122,8 @@ fun MovableFloatingControlPanel(
         var panelSize by remember {
             mutableStateOf(
                 IntSize(
-                    with(density) { 210.dp.toPx() }.roundToInt(),
-                    with(density) { 420.dp.toPx() }.roundToInt()
+                    with(density) { 188.dp.toPx() }.roundToInt(),
+                    with(density) { 360.dp.toPx() }.roundToInt()
                 )
             )
         }
@@ -136,7 +134,6 @@ fun MovableFloatingControlPanel(
         var handleX by remember { mutableFloatStateOf(xFraction.coerceIn(0f, 1f) * maxHandleX) }
         var handleY by remember { mutableFloatStateOf(yFraction.coerceIn(0f, 1f) * maxHandleY) }
 
-        // Keep pixel offsets synchronized when screen dimensions or persisted fractions change
         LaunchedEffect(xFraction, yFraction, maxHandleX, maxHandleY) {
             handleX = (xFraction.coerceIn(0f, 1f) * maxHandleX).coerceIn(0f, maxHandleX)
             handleY = (yFraction.coerceIn(0f, 1f) * maxHandleY).coerceIn(0f, maxHandleY)
@@ -151,9 +148,9 @@ fun MovableFloatingControlPanel(
         if (!isExpanded) {
             val isOnRightHalf = handleX > (maxHandleX * 0.5f)
             val handleShape = when {
-                handleX <= edgeMarginPx -> RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp)
-                handleX >= (maxHandleX - edgeMarginPx) -> RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)
-                else -> RoundedCornerShape(18.dp)
+                handleX <= edgeMarginPx -> RoundedCornerShape(topEnd = 14.dp, bottomEnd = 14.dp)
+                handleX >= (maxHandleX - edgeMarginPx) -> RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp)
+                else -> RoundedCornerShape(16.dp)
             }
 
             Row(
@@ -165,13 +162,23 @@ fun MovableFloatingControlPanel(
                         )
                     }
                     .onSizeChanged { handleSize = it }
-                    .shadow(8.dp, handleShape)
-                    .clip(handleShape)
-                    .background(elevated.copy(alpha = 0.92f))
-                    .border(1.dp, accent.copy(alpha = 0.55f), handleShape)
+                    .shadow(3.dp, handleShape, ambientColor = Color.Black.copy(alpha = 0.28f))
+                    .frostedGlass(
+                        shape = handleShape,
+                        baseColor = elevated,
+                        tintColor = accent,
+                        borderColor = accent,
+                        enabled = isFrostedGlass,
+                        fillAlpha = 0.46f,
+                        tintAlpha = 0.10f,
+                        borderAlpha = 0.55f
+                    )
                     .pointerInput(maxHandleX, maxHandleY) {
                         detectDragGestures(
-                            onDragEnd = { persistCurrentFractions() },
+                            onDragEnd = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                persistCurrentFractions()
+                            },
                             onDragCancel = { persistCurrentFractions() },
                             onDrag = { change, dragAmount ->
                                 change.consume()
@@ -180,8 +187,11 @@ fun MovableFloatingControlPanel(
                             }
                         )
                     }
-                    .clickable { onExpandedChange(true) }
-                    .padding(horizontal = 8.dp, vertical = 14.dp)
+                    .clickable {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onExpandedChange(true)
+                    }
+                    .padding(horizontal = 5.dp, vertical = 9.dp)
                     .testTag("floating_fullscreen_edge_handle"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
@@ -189,8 +199,8 @@ fun MovableFloatingControlPanel(
                 Icon(
                     imageVector = Icons.Default.DragIndicator,
                     contentDescription = "Drag to move control handle",
-                    tint = secondaryFg,
-                    modifier = Modifier.size(16.dp)
+                    tint = secondaryFg.copy(alpha = 0.72f),
+                    modifier = Modifier.size(13.dp)
                 )
                 Icon(
                     imageVector = if (isOnRightHalf) {
@@ -199,8 +209,8 @@ fun MovableFloatingControlPanel(
                         Icons.AutoMirrored.Filled.KeyboardArrowRight
                     },
                     contentDescription = "Open Movable Side Panel Controls",
-                    tint = accent,
-                    modifier = Modifier.size(20.dp)
+                    tint = accent.copy(alpha = 0.85f),
+                    modifier = Modifier.size(16.dp)
                 )
             }
         } else {
@@ -208,7 +218,7 @@ fun MovableFloatingControlPanel(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.22f))
+                    .background(Color.Black.copy(alpha = 0.14f))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
@@ -224,6 +234,7 @@ fun MovableFloatingControlPanel(
             val clampedPanelX = handleX.coerceIn(edgeMarginPx, maxPanelX)
             val clampedPanelY = handleY.coerceIn(edgeMarginPx, maxPanelY)
 
+            val panelShape = RoundedCornerShape(22.dp)
             Column(
                 modifier = Modifier
                     .offset {
@@ -233,19 +244,26 @@ fun MovableFloatingControlPanel(
                         )
                     }
                     .onSizeChanged { panelSize = it }
-                    .width(214.dp)
-                    .heightIn(max = (maxHeight - 24.dp).coerceAtLeast(240.dp))
-                    .shadow(14.dp, RoundedCornerShape(20.dp))
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(surface.copy(alpha = 0.98f))
-                    .border(1.dp, border, RoundedCornerShape(20.dp))
+                    .width(192.dp)
+                    .heightIn(max = (maxHeight - 24.dp).coerceAtLeast(220.dp))
+                    .shadow(14.dp, panelShape, ambientColor = Color.Black.copy(alpha = 0.45f))
+                    .frostedGlass(
+                        shape = panelShape,
+                        baseColor = surface,
+                        tintColor = accent,
+                        borderColor = border,
+                        enabled = isFrostedGlass,
+                        fillAlpha = 0.84f,
+                        tintAlpha = 0.08f,
+                        borderAlpha = 0.65f
+                    )
                     .testTag("floating_quick_menu_overlay")
             ) {
-                // Dedicated Draggable Header Bar so the user can move the open panel anywhere
+                // Compact Draggable Header Bar
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(elevated)
+                        .background(elevated.copy(alpha = if (isFrostedGlass) 0.55f else 0.88f))
                         .pointerInput(maxHandleX, maxHandleY, maxPanelX, maxPanelY) {
                             detectDragGestures(
                                 onDragEnd = { persistCurrentFractions() },
@@ -257,7 +275,7 @@ fun MovableFloatingControlPanel(
                                 }
                             )
                         }
-                        .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
+                        .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp)
                         .testTag("floating_panel_drag_header"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -270,58 +288,49 @@ fun MovableFloatingControlPanel(
                             imageVector = Icons.Default.DragIndicator,
                             contentDescription = "Drag to reposition panel",
                             tint = accent,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Column {
-                            Text(
-                                text = "Controls",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = fg,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = "Drag to move",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = secondaryFg,
-                                maxLines = 1
-                            )
-                        }
+                        Text(
+                            text = "Controls",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = fg,
+                            maxLines = 1
+                        )
                     }
 
                     IconButton(
                         onClick = { onExpandedChange(false) },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(32.dp)
                             .testTag("floating_panel_close_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Collapse Panel",
                             tint = secondaryFg,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
 
-                HorizontalDivider(color = border)
+                HorizontalDivider(color = border.copy(alpha = 0.6f))
 
-                // Scrollable Control Actions
+                // Compact Control Actions
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
-                        .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Connect / Switch Host
                     PanelActionButton(
-                        label = activeHostLabel.ifBlank { "Connect Remote URL" },
+                        label = activeHostLabel.ifBlank { "Connect Remote" },
                         icon = Icons.Default.Link,
                         iconTint = EmeraldOnline,
                         textColor = fg,
-                        containerColor = elevated,
+                        containerColor = elevated.copy(alpha = 0.72f),
                         testTag = "floating_quick_connect_host",
                         onClick = {
                             onExpandedChange(false)
@@ -329,13 +338,12 @@ fun MovableFloatingControlPanel(
                         }
                     )
 
-                    // Scan QR Pair
                     PanelActionButton(
                         label = "Scan QR Code",
                         icon = Icons.Default.QrCodeScanner,
                         iconTint = accent,
                         textColor = fg,
-                        containerColor = elevated,
+                        containerColor = elevated.copy(alpha = 0.72f),
                         testTag = "floating_quick_scan_qr",
                         onClick = {
                             onExpandedChange(false)
@@ -343,27 +351,12 @@ fun MovableFloatingControlPanel(
                         }
                     )
 
-                    // Re-Center Web Layout (fixes right-side alignment drift in 1 tap)
-                    PanelActionButton(
-                        label = "Re-Center Layout",
-                        icon = Icons.Default.CenterFocusStrong,
-                        iconTint = accent,
-                        textColor = fg,
-                        containerColor = elevated,
-                        testTag = "floating_quick_recenter_layout",
-                        onClick = {
-                            onExpandedChange(false)
-                            onRecenterWebLayout()
-                        }
-                    )
-
-                    // Reload Active Page
                     PanelActionButton(
                         label = "Reload Remote",
                         icon = Icons.Default.Refresh,
                         iconTint = secondaryFg,
                         textColor = fg,
-                        containerColor = elevated,
+                        containerColor = elevated.copy(alpha = 0.72f),
                         testTag = "floating_quick_reload_web",
                         onClick = {
                             onExpandedChange(false)
@@ -371,23 +364,12 @@ fun MovableFloatingControlPanel(
                         }
                     )
 
-                    // Live Voice Assistant
-                    PanelActionButton(
-                        label = "Live Voice",
-                        icon = Icons.Default.GraphicEq,
-                        iconTint = EmeraldOnline,
-                        textColor = fg,
-                        containerColor = elevated,
-                        testTag = "floating_quick_live_voice",
-                        onClick = {
-                            onExpandedChange(false)
-                            onOpenLiveVoice()
-                        }
+                    HorizontalDivider(
+                        color = border.copy(alpha = 0.55f),
+                        modifier = Modifier.padding(vertical = 2.dp)
                     )
 
-                    HorizontalDivider(color = border, modifier = Modifier.padding(vertical = 2.dp))
-
-                    // 3 Main Working Tabs (Remote, AI Copilot, Cloud Sync)
+                    // 2 Main Tabs: Remote & Cloud Sync
                     tabs.forEach { tab ->
                         val isSelected = selectedTabIndex == tab.index
                         PanelActionButton(
@@ -404,11 +386,13 @@ fun MovableFloatingControlPanel(
                         )
                     }
 
-                    HorizontalDivider(color = border, modifier = Modifier.padding(vertical = 2.dp))
+                    HorizontalDivider(
+                        color = border.copy(alpha = 0.55f),
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
 
-                    // Settings & Guide
                     PanelActionButton(
-                        label = "Settings & Themes",
+                        label = "Settings",
                         icon = Icons.Default.Settings,
                         iconTint = secondaryFg,
                         textColor = fg,
@@ -420,30 +404,16 @@ fun MovableFloatingControlPanel(
                         }
                     )
 
-                    PanelActionButton(
-                        label = "How to Use Guide",
-                        icon = Icons.AutoMirrored.Filled.HelpOutline,
-                        iconTint = accent,
-                        textColor = accent,
-                        containerColor = Color.Transparent,
-                        testTag = "floating_quick_guide",
-                        onClick = {
-                            onExpandedChange(false)
-                            onOpenGuide()
-                        }
-                    )
-
-                    // Optional Show Bars Toggle
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(accent)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(accent.copy(alpha = 0.90f))
                             .clickable {
                                 onExpandedChange(false)
                                 onShowBars()
                             }
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
                             .testTag("restore_bars_button"),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
@@ -451,15 +421,15 @@ fun MovableFloatingControlPanel(
                         Icon(
                             imageVector = Icons.Default.FullscreenExit,
                             contentDescription = "Show Top & Bottom Bars",
-                            tint = Color(0xFF070708),
-                            modifier = Modifier.size(18.dp)
+                            tint = Color(0xFF000000),
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Show Bars",
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF070708)
+                            color = Color(0xFF000000)
                         )
                     }
                 }
@@ -484,7 +454,7 @@ private fun PanelActionButton(
             .clip(RoundedCornerShape(12.dp))
             .background(containerColor)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -492,12 +462,12 @@ private fun PanelActionButton(
             imageVector = icon,
             contentDescription = label,
             tint = iconTint,
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(16.dp)
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.labelLarge,
+            style = MaterialTheme.typography.labelMedium,
             color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

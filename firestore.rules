@@ -1,14 +1,14 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 1. Global Default-Deny Safety Net
+    // 1. Global Default-Deny Safety Net (blocks all unlisted/unused paths including syncedSessions)
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // 2. Reusable Hardened Primitives
+    // 2. Zero-Trust Reusable Primitives
     function isSignedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.uid is string && request.auth.uid.size() > 0;
     }
 
     function isOwner(userId) {
@@ -27,36 +27,21 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // 3. Entity Validation Blueprints
+    // 3. Hardened Entity Validation Blueprints
     function isValidCloudServerProfile(data) {
       return data.userId is string && data.userId == request.auth.uid &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
-             data.endpointUrl is string && data.endpointUrl.size() >= 1 && data.endpointUrl.size() <= 300 &&
+             data.endpointUrl is string && data.endpointUrl.size() >= 8 && data.endpointUrl.size() <= 300 &&
+             data.endpointUrl.matches('^https?://.*') &&
              data.connectionMode is string && (
                data.connectionMode == 'HYBRID_BRIDGE' ||
                data.connectionMode == 'DIRECT_TUNNEL' ||
-               data.connectionMode == 'PAIRING_TOKEN' ||
-               data.connectionMode == 'SIMULATOR'
+               data.connectionMode == 'PAIRING_TOKEN'
              ) &&
-             data.authToken is string && data.authToken.size() <= 256 &&
+             // Never allow plaintext workstation auth/bearer tokens in cloud storage
+             data.authToken is string && data.authToken.size() == 0 &&
              data.keepAlivePinned is bool &&
              data.lastLatencyMs is int && data.lastLatencyMs >= 0 && data.lastLatencyMs <= 60000 &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
-    }
-
-    function isValidCloudSyncedSession(data) {
-      return data.userId is string && data.userId == request.auth.uid &&
-             data.workspaceName is string && data.workspaceName.size() >= 1 && data.workspaceName.size() <= 120 &&
-             data.branchName is string && data.branchName.size() >= 1 && data.branchName.size() <= 80 &&
-             data.status is string && (
-               data.status == 'ACTIVE' ||
-               data.status == 'AWAITING_APPROVAL' ||
-               data.status == 'IDLE' ||
-               data.status == 'COMPLETED'
-             ) &&
-             data.lastSummary is string && data.lastSummary.size() <= 2000 &&
-             data.messageCount is int && data.messageCount >= 0 && data.messageCount <= 100000 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -71,7 +56,7 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
-    // 4. User-Scoped Collections
+    // 4. Strictly User-Isolated Collections
     match /users/{userId}/serverProfiles/{profileId} {
       allow get: if isOwner(userId) && isValidId(profileId);
       allow list: if isOwner(userId);
@@ -102,35 +87,6 @@ service cloud.firestore {
                        ]);
 
       allow delete: if isOwner(userId) && isValidId(profileId);
-    }
-
-    match /users/{userId}/syncedSessions/{sessionId} {
-      allow get: if isOwner(userId) && isValidId(sessionId);
-      allow list: if isOwner(userId);
-
-      allow create: if isOwner(userId) &&
-                       isValidId(sessionId) &&
-                       incoming().keys().hasAll([
-                         'userId', 'workspaceName', 'branchName', 'status',
-                         'lastSummary', 'messageCount', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'workspaceName', 'branchName', 'status',
-                         'lastSummary', 'messageCount', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidCloudSyncedSession(incoming());
-
-      allow update: if isOwner(userId) &&
-                       isValidId(sessionId) &&
-                       isValidCloudSyncedSession(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'workspaceName', 'branchName', 'status',
-                         'lastSummary', 'messageCount', 'updatedAt'
-                       ]);
-
-      allow delete: if isOwner(userId) && isValidId(sessionId);
     }
 
     match /users/{userId}/copilotPrompts/{promptId} {

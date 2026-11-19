@@ -1,13 +1,8 @@
 <resources>
     <string name="app_name">Antigravity Pulse</string>
     <string name="nav_bridge">Remote</string>
-    <string name="nav_copilot">AI Copilot</string>
     <string name="nav_sync">Cloud Sync</string>
     <string name="sign_in_with_google">Sign in with Google</string>
     <string name="sign_out">Sign Out</string>
-    <string name="approve_step">Approve &amp; Run</string>
-    <string name="reject_step">Reject</string>
     <string name="send_to_agent">Insert into Remote</string>
-    <string name="generate_image">Generate UI Asset</string>
-    <string name="edit_image">Edit Selected Image</string>
 </resources>

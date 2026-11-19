@@ -148,7 +148,11 @@ fun handleFirestoreError(exception: Throwable, operationType: OperationType, pat
     }
 
     val jsonString = errorInfoJson.toString()
-    Log.e("FirestoreError", "Firestore Error: $jsonString")
+    if (BuildConfig.DEBUG) {
+        Log.e("FirestoreError", "Firestore Error: $jsonString")
+    } else {
+        Log.e("FirestoreError", "Firestore operation '${operationType.value}' failed.")
+    }
     return jsonString
 }
 
@@ -171,27 +175,13 @@ data class CloudServerProfile(
 
 @Keep
 @IgnoreExtraProperties
-data class CloudSyncedSession(
-    @DocumentId val id: String = "",
-    val userId: String = "",
-    val workspaceName: String = "",
-    val branchName: String = "main",
-    val status: String = "ACTIVE",
-    val lastSummary: String = "",
-    val messageCount: Long = 0L,
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
-)
-
-@Keep
-@IgnoreExtraProperties
 data class CloudCopilotPrompt(
     @DocumentId val id: String = "",
     val userId: String = "",
     val title: String = "",
     val promptText: String = "",
-    val rolePersona: String = "Antigravity Prompt Architect",
-    val preferredModel: String = "gemini-4-argon",
+    val rolePersona: String = "Antigravity Remote",
+    val preferredModel: String = "default",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -355,32 +345,6 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
         )
     }
 
-    fun observeCloudSyncedSessions(userId: String): Flow<List<CloudSyncedSession>> = flow {
-        require(userId.isNotBlank()) { "Authenticated userId required" }
-        val path = "users/$userId/syncedSessions"
-        emitAll(
-            db.collection("users").document(userId).collection("syncedSessions")
-                .snapshots()
-                .map { snapshot ->
-                    snapshot.toObjects(
-                        CloudSyncedSession::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    )
-                }
-                .catch { error ->
-                    val firestoreError = generateSequence(error) { it.cause }
-                        .filterIsInstance<FirebaseFirestoreException>()
-                        .firstOrNull()
-                    if (firestoreError == null && error is CancellationException) throw error
-                    val exceptionToLog = firestoreError ?: (error as? Exception)
-                    if (exceptionToLog != null && auth.currentUser?.uid == userId) {
-                        handleFirestoreError(exceptionToLog, OperationType.LIST, path)
-                    }
-                    throw error
-                }
-        )
-    }
-
     fun observeCloudCopilotPrompts(userId: String): Flow<List<CloudCopilotPrompt>> = flow {
         require(userId.isNotBlank()) { "Authenticated userId required" }
         val path = "users/$userId/copilotPrompts"
@@ -412,7 +376,6 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
         name: String,
         endpointUrl: String,
         connectionMode: String,
-        authToken: String,
         keepAlivePinned: Boolean,
         lastLatencyMs: Int
     ): Result<Unit> {
@@ -420,7 +383,13 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
         return try {
             val uid = requireUserId()
             val safeId = sanitizeDocId(profileId)
-            val validMode = if (connectionMode in listOf("HYBRID_BRIDGE", "DIRECT_TUNNEL", "PAIRING_TOKEN", "SIMULATOR")) {
+            val cleanUrl = endpointUrl.trim().take(300)
+            require(
+                cleanUrl.startsWith("https://", ignoreCase = true) ||
+                    cleanUrl.startsWith("http://", ignoreCase = true)
+            ) { "Only http:// or https:// host URLs can be backed up to Cloud Sync." }
+
+            val validMode = if (connectionMode in listOf("HYBRID_BRIDGE", "DIRECT_TUNNEL", "PAIRING_TOKEN")) {
                 connectionMode
             } else {
                 "HYBRID_BRIDGE"
@@ -432,9 +401,10 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
                 docRef.update(
                     mapOf(
                         "name" to name.trim().take(80).ifEmpty { "Antigravity Host" },
-                        "endpointUrl" to endpointUrl.trim().take(300).ifEmpty { "https://localhost:42100" },
+                        "endpointUrl" to cleanUrl,
                         "connectionMode" to validMode,
-                        "authToken" to authToken.take(256),
+                        // Zero-trust: never store plaintext workstation auth tokens in cloud backups
+                        "authToken" to "",
                         "keepAlivePinned" to keepAlivePinned,
                         "lastLatencyMs" to lastLatencyMs.coerceIn(0, 60000).toLong(),
                         "updatedAt" to FieldValue.serverTimestamp()
@@ -445,65 +415,12 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
                     mapOf(
                         "userId" to uid,
                         "name" to name.trim().take(80).ifEmpty { "Antigravity Host" },
-                        "endpointUrl" to endpointUrl.trim().take(300).ifEmpty { "https://localhost:42100" },
+                        "endpointUrl" to cleanUrl,
                         "connectionMode" to validMode,
-                        "authToken" to authToken.take(256),
+                        // Zero-trust: never store plaintext workstation auth tokens in cloud backups
+                        "authToken" to "",
                         "keepAlivePinned" to keepAlivePinned,
                         "lastLatencyMs" to lastLatencyMs.coerceIn(0, 60000).toLong(),
-                        "createdAt" to FieldValue.serverTimestamp(),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            }
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, docPath)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun syncAgentSessionToCloud(
-        sessionId: String,
-        workspaceName: String,
-        branchName: String,
-        status: String,
-        lastSummary: String,
-        messageCount: Int
-    ): Result<Unit> {
-        var docPath = "users/${auth.currentUser?.uid ?: "unauthenticated"}/syncedSessions"
-        return try {
-            val uid = requireUserId()
-            val safeId = sanitizeDocId(sessionId)
-            val validStatus = if (status in listOf("ACTIVE", "AWAITING_APPROVAL", "IDLE", "COMPLETED")) {
-                status
-            } else {
-                "ACTIVE"
-            }
-            val docRef = db.collection("users").document(uid).collection("syncedSessions").document(safeId)
-            docPath = docRef.path
-            val existingSnap = docRef.get().await()
-            if (existingSnap.exists()) {
-                docRef.update(
-                    mapOf(
-                        "workspaceName" to workspaceName.trim().take(120).ifEmpty { "workspace" },
-                        "branchName" to branchName.trim().take(80).ifEmpty { "main" },
-                        "status" to validStatus,
-                        "lastSummary" to lastSummary.take(2000),
-                        "messageCount" to messageCount.coerceIn(0, 100000).toLong(),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            } else {
-                docRef.set(
-                    mapOf(
-                        "userId" to uid,
-                        "workspaceName" to workspaceName.trim().take(120).ifEmpty { "workspace" },
-                        "branchName" to branchName.trim().take(80).ifEmpty { "main" },
-                        "status" to validStatus,
-                        "lastSummary" to lastSummary.take(2000),
-                        "messageCount" to messageCount.coerceIn(0, 100000).toLong(),
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp()
                     )

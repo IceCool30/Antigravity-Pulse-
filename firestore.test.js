@@ -49,7 +49,7 @@ test("Unauthenticated user: cannot read or write any user collections", async ()
       name: "Workstation Tunnel",
       endpointUrl: "https://antigravity.tailnet.ts.net:8443",
       connectionMode: "HYBRID_BRIDGE",
-      authToken: "tok_abc",
+      authToken: "",
       keepAlivePinned: true,
       lastLatencyMs: 14,
       createdAt: created,
@@ -58,18 +58,18 @@ test("Unauthenticated user: cannot read or write any user collections", async ()
   );
 });
 
-test("Authenticated owner: serverProfiles create, partial update, list, and delete succeed; invalid payloads fail", async () => {
+test("Authenticated owner: valid serverProfiles CRUD succeeds; javascript URLs and plaintext authTokens are rejected", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const created = new Date(Date.now() - 10000);
 
-  // Valid create (matches Kotlin CloudSyncRepository.upsertServerProfile)
+  // Valid create (no plaintext authToken, valid https URL)
   await assertSucceeds(
     aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_1").set({
       userId: ALICE_UID,
       name: "Antigravity Cloud Box",
-      endpointUrl: "wss://ag-remote.dev.example.com/ws",
+      endpointUrl: "https://ag-remote.dev.example.com",
       connectionMode: "HYBRID_BRIDGE",
-      authToken: "ag_live_9821",
+      authToken: "",
       keepAlivePinned: true,
       lastLatencyMs: 18,
       createdAt: created,
@@ -92,13 +92,27 @@ test("Authenticated owner: serverProfiles create, partial update, list, and dele
     aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").get()
   );
 
-  // Reject extra @DocumentId 'id' field on create
+  // Reject plaintext authToken upload to cloud
   await assertFails(
-    aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_2").set({
-      id: "prof_2",
+    aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_secret").set({
       userId: ALICE_UID,
-      name: "Invalid ID Field",
+      name: "Leaked Token",
       endpointUrl: "https://localhost:3000",
+      connectionMode: "HYBRID_BRIDGE",
+      authToken: "secret_bearer_token",
+      keepAlivePinned: true,
+      lastLatencyMs: 10,
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Reject javascript: XSS endpointUrl
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_xss").set({
+      userId: ALICE_UID,
+      name: "Malicious URL",
+      endpointUrl: "javascript:alert(1)",
       connectionMode: "HYBRID_BRIDGE",
       authToken: "",
       keepAlivePinned: true,
@@ -117,39 +131,31 @@ test("Authenticated owner: serverProfiles create, partial update, list, and dele
   );
 });
 
-test("Authenticated owner: syncedSessions and copilotPrompts create, update, and list succeed", async () => {
+test("Authenticated owner: copilotPrompts CRUD succeeds while removed syncedSessions collection is denied", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const created = new Date(Date.now() - 10000);
 
-  await assertSucceeds(
+  // Unused syncedSessions collection is strictly denied
+  await assertFails(
     aliceDb.collection("users").doc(ALICE_UID).collection("syncedSessions").doc("sess_1").set({
       userId: ALICE_UID,
-      workspaceName: "antigravity-mobile-bridge",
-      branchName: "feat/native-websocket-stream",
-      status: "AWAITING_APPROVAL",
-      lastSummary: "Ready to execute gradle :app:assembleDebug",
-      messageCount: 12,
+      workspaceName: "removed",
+      branchName: "main",
+      status: "ACTIVE",
+      lastSummary: "removed",
+      messageCount: 1,
       createdAt: created,
       updatedAt: created,
     })
   );
 
   await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("syncedSessions").doc("sess_1").update({
-      status: "ACTIVE",
-      lastSummary: "Approved command execution",
-      messageCount: 13,
-      updatedAt: new Date(Date.now() - 1000),
-    })
-  );
-
-  await assertSucceeds(
     aliceDb.collection("users").doc(ALICE_UID).collection("copilotPrompts").doc("prompt_1").set({
       userId: ALICE_UID,
-      title: "Zero-Reload WebSocket KeepAlive",
-      promptText: "Refactor the language_server client to buffer delta frames while backgrounded.",
-      rolePersona: "Antigravity Architect",
-      preferredModel: "gemini-4-argon",
+      title: "Zero-Reload Check",
+      promptText: "Run unit tests and summarize failures.",
+      rolePersona: "Antigravity Remote",
+      preferredModel: "default",
       createdAt: created,
       updatedAt: created,
     })
@@ -160,7 +166,7 @@ test("Authenticated owner: syncedSessions and copilotPrompts create, update, and
   );
 });
 
-test("Cross-user isolation: Bob cannot read, list, update, or delete Alice's profiles, sessions, or prompts", async () => {
+test("Cross-user isolation: Bob cannot read, list, update, or delete Alice's profiles or prompts", async () => {
   const created = new Date(Date.now() - 10000);
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
@@ -169,7 +175,7 @@ test("Cross-user isolation: Bob cannot read, list, update, or delete Alice's pro
       name: "Alice Private Server",
       endpointUrl: "https://alice.internal:8443",
       connectionMode: "HYBRID_BRIDGE",
-      authToken: "secret",
+      authToken: "",
       keepAlivePinned: true,
       lastLatencyMs: 9,
       createdAt: created,

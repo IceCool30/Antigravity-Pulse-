@@ -14,17 +14,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -40,10 +40,12 @@ import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
+import com.example.ui.theme.frostedGlass
 
 @Composable
 fun RetainedWebViewBridgeScreen(
     telemetry: BridgeTelemetry,
+    savedFallbackEndpoint: String = "",
     isFullscreenBarsHidden: Boolean,
     onToggleDomBooster: (Boolean) -> Unit,
     onSaveAndConnectUrl: (String) -> Unit,
@@ -53,10 +55,25 @@ fun RetainedWebViewBridgeScreen(
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
     val surface = appearance.surfaceColor
+    val secondaryFg = appearance.secondaryTextColor
     val accent = appearance.accentColor
 
-    var urlInput by rememberSaveable(telemetry.activeEndpoint) {
-        mutableStateOf(telemetry.activeEndpoint)
+    val effectiveEndpoint = telemetry.activeEndpoint.trim()
+        .ifBlank { savedFallbackEndpoint.trim() }
+
+    var urlInput by rememberSaveable(effectiveEndpoint) {
+        mutableStateOf(effectiveEndpoint)
+    }
+
+    // As soon as the saved remote endpoint is restored from Room or prefs, load it if idle
+    // without ever reloading an already-live session.
+    LaunchedEffect(effectiveEndpoint, telemetry.domLagBoosterEnabled) {
+        if (RetainedWebViewManager.isSafeHttpUrl(effectiveEndpoint)) {
+            RetainedWebViewManager.ensureUrlLoadedIfIdle(
+                url = effectiveEndpoint,
+                domLagBooster = telemetry.domLagBoosterEnabled
+            )
+        }
     }
 
     Column(
@@ -64,7 +81,7 @@ fun RetainedWebViewBridgeScreen(
             .fillMaxSize()
             .background(bg)
     ) {
-        // Collapsible URL, QR, Re-Center & DOM Lag Booster Toolbar (Hidden in Fullscreen Mode)
+        // Collapsible URL, QR & Lag Booster Toolbar (Hidden in Fullscreen Mode)
         AnimatedVisibility(visible = !isFullscreenBarsHidden) {
             Column(
                 modifier = Modifier
@@ -90,8 +107,16 @@ fun RetainedWebViewBridgeScreen(
                         onClick = onOpenQrScanner,
                         modifier = Modifier
                             .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(appearance.elevatedSurfaceColor)
+                            .frostedGlass(
+                                shape = RoundedCornerShape(14.dp),
+                                baseColor = appearance.elevatedSurfaceColor,
+                                tintColor = accent,
+                                borderColor = appearance.borderColor,
+                                enabled = appearance.isFrostedGlassEnabled,
+                                fillAlpha = 0.78f,
+                                tintAlpha = 0.08f,
+                                borderAlpha = 0.55f
+                            )
                             .testTag("webview_scan_qr_button")
                     ) {
                         Icon(
@@ -121,7 +146,7 @@ fun RetainedWebViewBridgeScreen(
                         Icon(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = "Load or Refresh Remote URL",
-                            tint = Color(0xFF070708)
+                            tint = Color(0xFF000000)
                         )
                     }
                 }
@@ -157,32 +182,21 @@ fun RetainedWebViewBridgeScreen(
                         modifier = Modifier.testTag("dom_lag_booster_chip")
                     )
 
-                    OutlinedButton(
-                        onClick = {
-                            RetainedWebViewManager.injectMobileLayoutFix()
-                            onJsBridgeEvent("Re-centered Antigravity Remote mobile layout")
-                        },
-                        modifier = Modifier.testTag("webview_recenter_layout_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CenterFocusStrong,
-                            contentDescription = "Re-Center Layout",
-                            tint = accent,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Re-Center", color = accent)
-                    }
+                    Text(
+                        text = "Pinned in RAM",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = secondaryFg
+                    )
                 }
             }
         }
 
-        // Full-bleed Memory-Pinned WebView Instance (0dp horizontal padding to prevent right-side offset)
+        // Full-bleed Memory-Pinned WebView Instance
         AndroidView(
             factory = { context ->
                 RetainedWebViewManager.obtainPinnedWebView(
                     context = context,
-                    endpointUrl = telemetry.activeEndpoint,
+                    endpointUrl = effectiveEndpoint,
                     domLagBooster = telemetry.domLagBoosterEnabled,
                     onJsBridgeMessage = onJsBridgeEvent
                 )

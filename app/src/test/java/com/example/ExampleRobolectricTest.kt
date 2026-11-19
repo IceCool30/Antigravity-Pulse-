@@ -2,7 +2,6 @@ package com.example
 
 import android.content.Context
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.ui.graphics.Color
@@ -23,8 +22,6 @@ import com.example.data.remote.AntigravityBridgeClient
 import com.example.data.remote.BridgeConnectionState
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
-import com.example.ui.screens.TerminalView
-import com.example.ui.screens.parseAnsiToAnnotatedString
 import com.example.ui.screens.parseAntigravityPairingPayload
 import com.example.ui.theme.AntigravityPulseTheme
 import com.example.ui.theme.AppearancePreferencesManager
@@ -223,63 +220,6 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `TerminalView composable renders real-time logs and executes commands`() {
-        val executedCommands = mutableListOf<String>()
-        var clearedCount = 0
-
-        val liveLogs = listOf(
-            TerminalLogEntity(
-                id = "log_1",
-                sessionId = "sess_1",
-                command = "gradle :app:assembleDebug",
-                output = "BUILD SUCCESSFUL in 4s\n32 actionable tasks: 32 executed",
-                exitCode = 0,
-                durationMs = 4120,
-                timestampEpoch = System.currentTimeMillis()
-            )
-        )
-
-        composeTestRule.setContent {
-            AntigravityPulseTheme(appearance = AppearanceSettings()) {
-                TerminalView(
-                    terminalLogs = liveLogs,
-                    telemetry = BridgeTelemetry(
-                        state = BridgeConnectionState.CONNECTED_LIVE_SOCKET,
-                        activeEndpoint = "wss://workstation.local:8443",
-                        latencyMs = 11
-                    ),
-                    isExecutingCommand = false,
-                    onExecuteCommand = { cmd -> executedCommands.add(cmd) },
-                    onClearTerminal = { clearedCount++ },
-                    onOpenServerConfig = {}
-                )
-            }
-        }
-
-        composeTestRule.waitForIdle()
-
-        // Verify TerminalView LazyColumn and real-time command output are displayed
-        composeTestRule.onNodeWithTag("terminal_view_root").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("terminal_output_list").assertIsDisplayed()
-        composeTestRule.onNodeWithText("$ gradle :app:assembleDebug").assertIsDisplayed()
-        composeTestRule.onNodeWithText("exit 0 • 4120ms").assertIsDisplayed()
-
-        // Enter a new shell command and click Run
-        composeTestRule.onNodeWithTag("terminal_command_input")
-            .performTextInput("git status --short")
-        composeTestRule.onNodeWithTag("run_terminal_command_button")
-            .performClick()
-        composeTestRule.waitForIdle()
-
-        assertEquals(listOf("git status --short"), executedCommands)
-
-        // Click Clear terminal button
-        composeTestRule.onNodeWithTag("clear_terminal_button").performClick()
-        composeTestRule.waitForIdle()
-        assertEquals(1, clearedCount)
-    }
-
-    @Test
     fun `QR pairing payload parser handles JSON deep-link HTTPS and invalid payloads`() {
         val jsonPayload = parseAntigravityPairingPayload(
             """{"name":"Workstation Pro","url":"https://dev.tailnet.ts.net:8443","token":"tok_abc123"}"""
@@ -306,15 +246,6 @@ class ExampleRobolectricTest {
 
         assertNull(parseAntigravityPairingPayload("not a valid url"))
         assertNull(parseAntigravityPairingPayload(""))
-    }
-
-    @Test
-    fun `ANSI parser strips escape sequences and applies color and bold spans`() {
-        val raw = "\u001B[1;31mERROR:\u001B[0m Build failed • \u001B[32m2 tests passed\u001B[0m"
-        val parsed = parseAnsiToAnnotatedString(raw, Color.White)
-        assertEquals("ERROR: Build failed • 2 tests passed", parsed.text)
-        assertTrue(parsed.spanStyles.size >= 3)
-        assertFalse(parsed.text.contains("\u001B"))
     }
 
     @Test
@@ -379,95 +310,67 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `TerminalView accessory key bar Ctrl-C and Explain Error with Copilot work interactively`() {
-        var ctrlCCount = 0
-        var debuggedCommand = ""
-        var debuggedOutput = ""
-
-        val failedLog = listOf(
-            TerminalLogEntity(
-                id = "err_log_1",
-                sessionId = "sess_1",
-                command = "npm test",
-                output = "\u001B[31mFAIL\u001B[0m src/bridge.test.ts: AssertionError",
-                exitCode = 1,
-                durationMs = 890,
-                timestampEpoch = System.currentTimeMillis()
-            )
-        )
-
-        composeTestRule.setContent {
-            AntigravityPulseTheme(appearance = AppearanceSettings()) {
-                TerminalView(
-                    terminalLogs = failedLog,
-                    telemetry = BridgeTelemetry(
-                        state = BridgeConnectionState.CONNECTED_LIVE_SOCKET,
-                        activeEndpoint = "wss://workstation.local:8443"
-                    ),
-                    isExecutingCommand = false,
-                    onExecuteCommand = {},
-                    onSendCtrlC = { ctrlCCount++ },
-                    onClearTerminal = {},
-                    onDebugErrorWithCopilot = { cmd, out ->
-                        debuggedCommand = cmd
-                        debuggedOutput = out
-                    }
-                )
-            }
-        }
-
-        composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("terminal_accessory_key_bar").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("accessory_key_ctrl_c").performClick()
-        assertEquals(1, ctrlCCount)
-
-        // Verify Explain & Fix with Copilot button appears on failed exitCode != 0
-        composeTestRule.onNodeWithTag("explain_error_copilot_err_log_1").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("explain_error_copilot_err_log_1").performClick()
-        assertEquals("npm test", debuggedCommand)
-        assertTrue(debuggedOutput.contains("AssertionError"))
-    }
-
-    @Test
-    fun `app defaults to fullscreen with persisted movable side panel position and clean mobile UA`() {
+    fun `app defaults to pure black OLED background fullscreen and developer profile persists`() {
         val defaultSettings = AppearanceSettings()
+        assertEquals("#000000", defaultSettings.backgroundHex)
+        assertEquals("#000000", OfficialAntigravityPresets.first().backgroundHex)
         assertTrue(defaultSettings.isFullscreenBarsHidden)
         assertFalse(defaultSettings.showStartupGuideOnLaunch)
         assertEquals(0f, defaultSettings.floatingHandleXFraction, 0.001f)
         assertEquals(0.42f, defaultSettings.floatingHandleYFraction, 0.001f)
+        assertEquals("Solomon Ogar Bukie", defaultSettings.developerName)
+        assertEquals("solomonogarbukie@gmail.com", defaultSettings.developerEmail)
+        assertEquals("IceCool30", defaultSettings.developerGithub)
+        assertTrue(defaultSettings.isMaterialYouDynamicEnabled)
+        assertTrue(defaultSettings.isFrostedGlassEnabled)
 
         val manager = AppearancePreferencesManager(context)
         manager.update {
             it.copy(
                 floatingHandleXFraction = 0.85f,
-                floatingHandleYFraction = 0.72f
+                floatingHandleYFraction = 0.72f,
+                developerName = "Solomon Bukie",
+                developerGithub = "solomondev",
+                isMaterialYouDynamicEnabled = true,
+                isFrostedGlassEnabled = false
             )
         }
         val reloaded = AppearancePreferencesManager(context).settings.value
         assertEquals(0.85f, reloaded.floatingHandleXFraction, 0.001f)
         assertEquals(0.72f, reloaded.floatingHandleYFraction, 0.001f)
+        assertEquals("Solomon Bukie", reloaded.developerName)
+        assertEquals("solomondev", reloaded.developerGithub)
+        assertTrue(reloaded.isMaterialYouDynamicEnabled)
+        assertFalse(reloaded.isFrostedGlassEnabled)
+
+        // Picking a manual preset cleanly switches off Material You dynamic accent so the preset color applies
+        manager.applyPreset(OfficialAntigravityPresets.first())
+        assertFalse(manager.settings.value.isMaterialYouDynamicEnabled)
 
         val rawWvUa = "Mozilla/5.0 (Linux; Android 15; Pixel 9; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Mobile Safari/537.36"
         val cleanUa = RetainedWebViewManager.buildCleanMobileUserAgent(rawWvUa)
         assertFalse(cleanUa.contains("; wv"))
         assertFalse(cleanUa.contains("Version/4.0 "))
         assertTrue(cleanUa.contains("Chrome/131.0.0.0"))
+
+        // Verify WebView file chooser hook attaches and clears cleanly for "+" file picker
+        var invoked = false
+        RetainedWebViewManager.onShowFileChooserHandler = { cb, _ ->
+            invoked = true
+            cb.onReceiveValue(null)
+            true
+        }
+        assertNotNull(RetainedWebViewManager.onShowFileChooserHandler)
+        RetainedWebViewManager.onShowFileChooserHandler?.invoke(android.webkit.ValueCallback {}, null)
+        assertTrue(invoked)
+        RetainedWebViewManager.onShowFileChooserHandler = null
+        assertNull(RetainedWebViewManager.onShowFileChooserHandler)
     }
 
     @Test
-    fun `CopilotViewModel defaults to billing-free Gemini 3_8 Flash`() {
-        val copilotVm = com.example.viewmodel.CopilotViewModel(database.dao())
-        assertEquals(
-            com.example.viewmodel.GeminiCopilotModel.GEMINI_3_8_FLASH,
-            copilotVm.selectedModel.value
-        )
-        assertEquals("gemini-3.8-flash", copilotVm.selectedModel.value.modelId)
-    }
-
-    @Test
-    fun `MovableFloatingControlPanel opens on tap and triggers recenter and tab actions`() {
+    fun `MovableFloatingControlPanel opens on tap and triggers reload and tab actions`() {
         var expanded = false
-        var recentered = false
+        var reloaded = false
         var selectedTab = 0
 
         composeTestRule.setContent {
@@ -479,14 +382,13 @@ class ExampleRobolectricTest {
                     yFraction = 0.42f,
                     tabs = listOf(
                         com.example.ui.components.FloatingPanelTabItem(0, "Remote", Icons.Default.Language, "nav_tab_bridge"),
-                        com.example.ui.components.FloatingPanelTabItem(1, "AI Copilot", Icons.Default.AutoAwesome, "nav_tab_copilot"),
-                        com.example.ui.components.FloatingPanelTabItem(2, "Cloud Sync", Icons.Default.CloudSync, "nav_tab_sync")
+                        com.example.ui.components.FloatingPanelTabItem(1, "Cloud Sync", Icons.Default.CloudSync, "nav_tab_sync")
                     ),
                     selectedTabIndex = selectedTab,
                     activeHostLabel = "My Workstation",
-                    surface = Color(0xFF141418),
-                    elevated = Color(0xFF1E1E24),
-                    border = Color(0xFF2D2D36),
+                    surface = Color(0xFF0A0A0C),
+                    elevated = Color(0xFF141418),
+                    border = Color(0xFF222228),
                     fg = Color.White,
                     secondaryFg = Color.LightGray,
                     accent = Color(0xFFFFC799),
@@ -498,12 +400,9 @@ class ExampleRobolectricTest {
                     onSelectTab = { selectedTab = it },
                     onOpenHostSwitcher = {},
                     onOpenQrScanner = {},
-                    onRecenterWebLayout = { recentered = true },
-                    onReloadWeb = {},
-                    onOpenLiveVoice = {},
+                    onReloadWeb = { reloaded = true },
                     onShowBars = {},
-                    onOpenSettings = {},
-                    onOpenGuide = {}
+                    onOpenSettings = {}
                 )
             }
         }
@@ -516,10 +415,43 @@ class ExampleRobolectricTest {
         assertTrue(expanded)
         composeTestRule.onNodeWithTag("floating_quick_menu_overlay").assertIsDisplayed()
         composeTestRule.onNodeWithTag("floating_panel_drag_header").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("floating_quick_recenter_layout").performClick()
+        composeTestRule.onNodeWithTag("floating_quick_reload_web").performClick()
         composeTestRule.waitForIdle()
 
-        assertTrue(recentered)
+        assertTrue(reloaded)
         assertFalse(expanded)
+    }
+
+    @Test
+    fun `returning after biometric unlock preserves active remote session and lastActiveRemoteUrl`() {
+        val manager = AppearancePreferencesManager(context)
+        val remoteUrl = "https://workstation.tailnet.ts.net:8443/remote"
+        manager.update { it.copy(lastActiveRemoteUrl = remoteUrl) }
+        assertEquals(remoteUrl, AppearancePreferencesManager(context).settings.value.lastActiveRemoteUrl)
+
+        // Simulate loading an active remote session into RetainedWebViewManager
+        RetainedWebViewManager.obtainPinnedWebView(
+            context = context,
+            endpointUrl = remoteUrl,
+            domLagBooster = true,
+            onJsBridgeMessage = {}
+        )
+        assertTrue(RetainedWebViewManager.hasActiveLoadedSession())
+        assertEquals(remoteUrl, RetainedWebViewManager.currentLoadedEndpoint())
+
+        // Simulate resuming after biometric unlock before Room finishes async load (blank endpoint)
+        RetainedWebViewManager.obtainPinnedWebView(
+            context = context,
+            endpointUrl = "",
+            domLagBooster = true,
+            onJsBridgeMessage = {}
+        )
+        // Active remote session MUST remain intact (never overwritten with welcome screen)
+        assertTrue(RetainedWebViewManager.hasActiveLoadedSession())
+        assertEquals(remoteUrl, RetainedWebViewManager.currentLoadedEndpoint())
+
+        // Explicit reset clears back to welcome screen
+        RetainedWebViewManager.resetToWelcomeScreen()
+        assertFalse(RetainedWebViewManager.hasActiveLoadedSession())
     }
 }
