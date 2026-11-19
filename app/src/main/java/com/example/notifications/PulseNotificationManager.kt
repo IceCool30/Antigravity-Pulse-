@@ -47,6 +47,13 @@ object PulseNotificationManager {
     private var lastSignature: String = ""
     private var lastDispatchedAtMs: Long = 0L
 
+    @Volatile
+    var isAppInForeground: Boolean = true
+
+    fun shouldSuppressForForeground(onlyWhenBackground: Boolean): Boolean {
+        return onlyWhenBackground && isAppInForeground
+    }
+
     fun hasNotificationPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(
@@ -127,8 +134,13 @@ object PulseNotificationManager {
         context: Context,
         title: String,
         body: String,
-        tag: String = ""
+        tag: String = "",
+        onlyWhenBackground: Boolean = false
     ): Boolean {
+        if (shouldSuppressForForeground(onlyWhenBackground)) {
+            return false
+        }
+
         val cleanTitle = sanitizeText(title, MAX_TITLE_CHARS).ifBlank { "Antigravity Agent" }
         val cleanBody = sanitizeText(body, MAX_BODY_CHARS).ifBlank { "Your remote agent task has an update." }
         val cleanTag = sanitizeText(tag, MAX_TAG_CHARS)

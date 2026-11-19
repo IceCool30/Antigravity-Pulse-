@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Fullscreen
@@ -40,6 +39,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsNone
+import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.AlertDialog
@@ -119,7 +119,6 @@ fun AppearanceSettingsSheet(
     var showFontDropdown by remember { mutableStateOf(false) }
     var showFontSizeDropdown by remember { mutableStateOf(false) }
     var isCodePreviewExpanded by rememberSaveable { mutableStateOf(true) }
-    var showEditDeveloperDialog by rememberSaveable { mutableStateOf(false) }
 
     // Hex Color Editor state ("Background", "Foreground", or "Accent")
     var editingColorField by rememberSaveable { mutableStateOf<String?>(null) }
@@ -758,7 +757,7 @@ fun AppearanceSettingsSheet(
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Deliver native Android alerts whenever your remote Antigravity agent finishes a task or needs approval",
+                                text = "Live session observer alerts you when your agent finishes a task or requests approval (works while open or minimized; set Android Battery to Unrestricted for longer background runs)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = secondaryFg
                             )
@@ -776,6 +775,52 @@ fun AppearanceSettingsSheet(
                                 checkedTrackColor = accent
                             ),
                             modifier = Modifier.testTag("agent_notifications_switch")
+                        )
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Only Alert When in Background
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.NotificationsPaused,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Only Alert in Background",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Skip agent banners while you are actively viewing the session; still notify when you switch apps",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Switch(
+                            checked = settings.isNotifyOnlyInBackground,
+                            enabled = settings.isApprovalNotificationsEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(isNotifyOnlyInBackground = enabled) }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = bg,
+                                checkedTrackColor = accent
+                            ),
+                            modifier = Modifier.testTag("notify_only_background_switch")
                         )
                     }
 
@@ -1151,18 +1196,6 @@ fun AppearanceSettingsSheet(
                                     )
                                 }
                             }
-
-                            IconButton(
-                                onClick = { showEditDeveloperDialog = true },
-                                modifier = Modifier.testTag("edit_developer_profile_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "Edit Developer Info",
-                                    tint = secondaryFg,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
                         }
 
                         HorizontalDivider(color = border, thickness = 1.dp)
@@ -1255,76 +1288,6 @@ fun AppearanceSettingsSheet(
                 }
             }
         }
-    }
-
-    // Modal: Edit Developer Attribution Details
-    if (showEditDeveloperDialog) {
-        var devNameInput by remember(settings.developerName) { mutableStateOf(settings.developerName) }
-        var devEmailInput by remember(settings.developerEmail) { mutableStateOf(settings.developerEmail) }
-        var devGithubInput by remember(settings.developerGithub) { mutableStateOf(settings.developerGithub) }
-
-        AlertDialog(
-            onDismissRequest = { showEditDeveloperDialog = false },
-            containerColor = surface,
-            title = {
-                Text(
-                    text = "Developer Details",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = fg
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = devNameInput,
-                        onValueChange = { devNameInput = it },
-                        label = { Text("Full Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = devEmailInput,
-                        onValueChange = { devEmailInput = it },
-                        label = { Text("Email Address") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = devGithubInput,
-                        onValueChange = { devGithubInput = it.removePrefix("@") },
-                        label = { Text("GitHub Username") },
-                        prefix = { Text("@") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onUpdateSettings {
-                            it.copy(
-                                developerName = devNameInput.trim().ifBlank { it.developerName },
-                                developerEmail = devEmailInput.trim().ifBlank { it.developerEmail },
-                                developerGithub = devGithubInput.trim().removePrefix("@").ifBlank { it.developerGithub }
-                            )
-                        }
-                        showEditDeveloperDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = accent,
-                        contentColor = Color(0xFF000000)
-                    )
-                ) {
-                    Text("Save", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEditDeveloperDialog = false }) {
-                    Text("Cancel", color = secondaryFg)
-                }
-            }
-        )
     }
 
     // Modal 1: Full-Height Radio-Button Preset Picker matching Screenshot 4 (`Screenshot_20261118-112636_62bed107.jpg`)

@@ -190,13 +190,23 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        PulseNotificationManager.isAppInForeground = true
+        RetainedWebViewManager.keepTimersRunning()
+    }
+
     override fun onPause() {
+        PulseNotificationManager.isAppInForeground = false
         RetainedWebViewManager.flushCookies()
+        RetainedWebViewManager.keepTimersRunning()
         super.onPause()
     }
 
     override fun onStop() {
+        PulseNotificationManager.isAppInForeground = false
         RetainedWebViewManager.flushCookies()
+        RetainedWebViewManager.keepTimersRunning()
         super.onStop()
     }
 }
@@ -527,16 +537,20 @@ fun AntigravityPulseApp(
         }
     }
 
-    // Bridge remote PWA Web Notifications (window.Notification & ServiceWorker.showNotification)
+    // Bridge remote PWA Web Notifications & live DOM agent activity alerts
     // straight into native Android heads-up notifications
-    DisposableEffect(appearance.isApprovalNotificationsEnabled) {
+    DisposableEffect(
+        appearance.isApprovalNotificationsEnabled,
+        appearance.isNotifyOnlyInBackground
+    ) {
         RetainedWebViewManager.onWebNotificationReceived = { title, body, tag ->
             if (appearance.isApprovalNotificationsEnabled) {
                 PulseNotificationManager.showAgentNotification(
                     context = context,
                     title = title,
                     body = body,
-                    tag = tag
+                    tag = tag,
+                    onlyWhenBackground = appearance.isNotifyOnlyInBackground
                 )
             }
         }

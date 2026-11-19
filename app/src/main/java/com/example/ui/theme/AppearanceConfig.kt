@@ -111,6 +111,12 @@ val AvailableAntigravityFonts = listOf(
 
 val AvailableFontSizesPx = listOf(12, 13, 14, 15, 16, 18)
 
+object DeveloperAttribution {
+    const val NAME: String = "Solomon Ogar Bukie"
+    const val EMAIL: String = "solomonogarbukie@gmail.com"
+    const val GITHUB_USERNAME: String = "IceCool30"
+}
+
 data class AppearanceSettings(
     val themeMode: AntigravityThemeMode = AntigravityThemeMode.DARK,
     val contrastMode: AntigravityContrastMode = AntigravityContrastMode.STRONG,
@@ -128,14 +134,15 @@ data class AppearanceSettings(
     val savedTerminalMacros: List<String> = emptyList(),
     val floatingHandleXFraction: Float = 0f,
     val floatingHandleYFraction: Float = 0.42f,
-    val developerName: String = "Solomon Ogar Bukie",
-    val developerEmail: String = "solomonogarbukie@gmail.com",
-    val developerGithub: String = "IceCool30",
     val lastActiveRemoteUrl: String = "",
     val isMaterialYouDynamicEnabled: Boolean = true,
     val isFrostedGlassEnabled: Boolean = true,
-    val isAppEventNotificationsEnabled: Boolean = true
+    val isAppEventNotificationsEnabled: Boolean = true,
+    val isNotifyOnlyInBackground: Boolean = false
 ) {
+    val developerName: String get() = DeveloperAttribution.NAME
+    val developerEmail: String get() = DeveloperAttribution.EMAIL
+    val developerGithub: String get() = DeveloperAttribution.GITHUB_USERNAME
     val backgroundColor: Color
         get() = if (themeMode == AntigravityThemeMode.LIGHT) {
             Color(0xFFF8FAFC)
@@ -241,13 +248,11 @@ class AppearancePreferencesManager(context: Context) {
             savedTerminalMacros = parsedMacros,
             floatingHandleXFraction = prefs.getFloat("floating_handle_x_fraction", 0f).coerceIn(0f, 1f),
             floatingHandleYFraction = prefs.getFloat("floating_handle_y_fraction", 0.42f).coerceIn(0f, 1f),
-            developerName = prefs.getString("developer_name", "Solomon Ogar Bukie") ?: "Solomon Ogar Bukie",
-            developerEmail = prefs.getString("developer_email", "solomonogarbukie@gmail.com") ?: "solomonogarbukie@gmail.com",
-            developerGithub = prefs.getString("developer_github_v2", "IceCool30") ?: "IceCool30",
             lastActiveRemoteUrl = prefs.getString("last_active_remote_url", "") ?: "",
             isMaterialYouDynamicEnabled = prefs.getBoolean("material_you_dynamic_enabled", true),
             isFrostedGlassEnabled = prefs.getBoolean("frosted_glass_enabled", true),
-            isAppEventNotificationsEnabled = prefs.getBoolean("app_event_notifications_enabled", true)
+            isAppEventNotificationsEnabled = prefs.getBoolean("app_event_notifications_enabled", true),
+            isNotifyOnlyInBackground = prefs.getBoolean("notify_only_in_background", false)
         )
     }
 
@@ -271,13 +276,11 @@ class AppearancePreferencesManager(context: Context) {
             .putString("saved_terminal_macros", next.savedTerminalMacros.joinToString("\n"))
             .putFloat("floating_handle_x_fraction", next.floatingHandleXFraction.coerceIn(0f, 1f))
             .putFloat("floating_handle_y_fraction", next.floatingHandleYFraction.coerceIn(0f, 1f))
-            .putString("developer_name", next.developerName)
-            .putString("developer_email", next.developerEmail)
-            .putString("developer_github_v2", next.developerGithub)
             .putString("last_active_remote_url", next.lastActiveRemoteUrl)
             .putBoolean("material_you_dynamic_enabled", next.isMaterialYouDynamicEnabled)
             .putBoolean("frosted_glass_enabled", next.isFrostedGlassEnabled)
             .putBoolean("app_event_notifications_enabled", next.isAppEventNotificationsEnabled)
+            .putBoolean("notify_only_in_background", next.isNotifyOnlyInBackground)
             .apply()
     }
 

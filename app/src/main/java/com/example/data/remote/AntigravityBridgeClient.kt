@@ -727,6 +727,18 @@ object RetainedWebViewManager {
         }
     }
 
+    /**
+     * Keeps JavaScript timers and WebSocket heartbeats running while the user minimizes
+     * Antigravity Pulse so the live DOM activity observer can deliver native agent alerts
+     * as soon as the remote agent finishes or requests approval.
+     */
+    fun keepTimersRunning() {
+        try {
+            pinnedWebView?.resumeTimers()
+        } catch (_: Exception) {
+        }
+    }
+
     fun buildCleanMobileUserAgent(rawUserAgent: String): String {
         return rawUserAgent
             .replace("; wv", "")
@@ -1024,11 +1036,13 @@ object RetainedWebViewManager {
     }
 
     /**
-     * Polyfills the browser Web Notifications API (`window.Notification`,
-     * `ServiceWorkerRegistration.prototype.showNotification`, and `navigator.permissions`)
-     * inside Android WebView so the remote Antigravity PWA delivers agent completion and
-     * approval notifications straight through Android's native notification system without
-     * exposing any `addJavascriptInterface` attack surface.
+     * Bridges remote Antigravity notifications into native Android notifications via:
+     * 1) Web Notifications API polyfill (`window.Notification`, `ServiceWorkerRegistration.showNotification`,
+     *    `navigator.permissions`, and `antigravity:notify` events),
+     * 2) A lightweight, throttled Smart DOM Agent Activity & Approval Observer (because Android's
+     *    built-in WebView does not implement Chrome's server-side `PushManager`), detecting real
+     *    agent working -> finished transitions, newly appearing approval prompts, and chime plays
+     *    without exposing any `addJavascriptInterface` attack surface.
      */
     fun injectWebNotificationBridge(webView: WebView? = pinnedWebView) {
         val target = webView ?: return
@@ -1036,9 +1050,6 @@ object RetainedWebViewManager {
         val js = """
             (function() {
               try {
-                if (window.__agPulseNotifyShimmed) { return; }
-                window.__agPulseNotifyShimmed = true;
-
                 function emitNativeNotification(title, options) {
                   try {
                     var opts = options || {};
@@ -1051,70 +1062,300 @@ object RetainedWebViewManager {
                   } catch (e) {}
                 }
 
-                function PulseNotification(title, options) {
-                  this.title = String(title || 'Antigravity Agent');
-                  this.body = String((options && options.body) || '');
-                  this.tag = String((options && options.tag) || '');
-                  this.onclick = null;
-                  this.onclose = null;
-                  this.onerror = null;
-                  this.onshow = null;
-                  emitNativeNotification(this.title, options);
-                }
-                PulseNotification.permission = 'granted';
-                PulseNotification.maxActions = 2;
-                PulseNotification.requestPermission = function(callback) {
-                  if (typeof callback === 'function') {
-                    try { callback('granted'); } catch (e) {}
+                if (!window.__agPulseNotifyShimmed) {
+                  window.__agPulseNotifyShimmed = true;
+
+                  function PulseNotification(title, options) {
+                    this.title = String(title || 'Antigravity Agent');
+                    this.body = String((options && options.body) || '');
+                    this.tag = String((options && options.tag) || '');
+                    this.onclick = null;
+                    this.onclose = null;
+                    this.onerror = null;
+                    this.onshow = null;
+                    window.__agPulseLastNotifiedAt = Date.now();
+                    emitNativeNotification(this.title, options);
                   }
-                  return Promise.resolve('granted');
-                };
-                PulseNotification.prototype.close = function() {
-                  if (typeof this.onclose === 'function') {
-                    try { this.onclose(); } catch (e) {}
+                  PulseNotification.permission = 'granted';
+                  PulseNotification.maxActions = 2;
+                  PulseNotification.requestPermission = function(callback) {
+                    if (typeof callback === 'function') {
+                      try { callback('granted'); } catch (e) {}
+                    }
+                    return Promise.resolve('granted');
+                  };
+                  PulseNotification.prototype.close = function() {
+                    if (typeof this.onclose === 'function') {
+                      try { this.onclose(); } catch (e) {}
+                    }
+                  };
+                  PulseNotification.prototype.addEventListener = function() {};
+                  PulseNotification.prototype.removeEventListener = function() {};
+
+                  try {
+                    Object.defineProperty(window, 'Notification', {
+                      value: PulseNotification,
+                      writable: true,
+                      configurable: true
+                    });
+                  } catch (e) {
+                    window.Notification = PulseNotification;
                   }
-                };
-                PulseNotification.prototype.addEventListener = function() {};
-                PulseNotification.prototype.removeEventListener = function() {};
 
-                try {
-                  Object.defineProperty(window, 'Notification', {
-                    value: PulseNotification,
-                    writable: true,
-                    configurable: true
+                  if (window.ServiceWorkerRegistration && window.ServiceWorkerRegistration.prototype) {
+                    var origShow = window.ServiceWorkerRegistration.prototype.showNotification;
+                    window.ServiceWorkerRegistration.prototype.showNotification = function(title, options) {
+                      window.__agPulseLastNotifiedAt = Date.now();
+                      emitNativeNotification(title, options);
+                      if (typeof origShow === 'function') {
+                        try { return origShow.call(this, title, options); } catch (e) {}
+                      }
+                      return Promise.resolve();
+                    };
+                  }
+
+                  if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+                    var origQuery = navigator.permissions.query.bind(navigator.permissions);
+                    navigator.permissions.query = function(desc) {
+                      if (desc && desc.name === 'notifications') {
+                        return Promise.resolve({ state: 'granted', onchange: null });
+                      }
+                      return origQuery(desc);
+                    };
+                  }
+
+                  window.addEventListener('antigravity:notify', function(ev) {
+                    var detail = (ev && ev.detail) || {};
+                    window.__agPulseLastNotifiedAt = Date.now();
+                    emitNativeNotification(detail.title || 'Antigravity Agent', {
+                      body: detail.body || detail.message || '',
+                      tag: detail.tag || ''
+                    });
                   });
-                } catch (e) {
-                  window.Notification = PulseNotification;
+
+                  // Hook short notification audio chimes played by the remote PWA
+                  if (window.HTMLAudioElement && window.HTMLAudioElement.prototype && !window.__agPulseAudioHooked) {
+                    window.__agPulseAudioHooked = true;
+                    var origAudioPlay = window.HTMLAudioElement.prototype.play;
+                    window.HTMLAudioElement.prototype.play = function() {
+                      try {
+                        var now = Date.now();
+                        var bootAt = window.__agPulseBootAt || now;
+                        var lastAt = window.__agPulseLastNotifiedAt || 0;
+                        var dur = this.duration;
+                        var isShortChime = isNaN(dur) || dur === 0 || dur <= 8;
+                        if (isShortChime && (now - bootAt) > 4500 && (now - lastAt) > 6500) {
+                          window.__agPulseLastNotifiedAt = now;
+                          emitNativeNotification('Antigravity Update', {
+                            body: 'Your remote Antigravity agent sent an alert.',
+                            tag: 'ag_audio_chime'
+                          });
+                        }
+                      } catch (e) {}
+                      return origAudioPlay.apply(this, arguments);
+                    };
+                  }
                 }
 
-                if (window.ServiceWorkerRegistration && window.ServiceWorkerRegistration.prototype) {
-                  var origShow = window.ServiceWorkerRegistration.prototype.showNotification;
-                  window.ServiceWorkerRegistration.prototype.showNotification = function(title, options) {
-                    emitNativeNotification(title, options);
-                    if (typeof origShow === 'function') {
-                      try { return origShow.call(this, title, options); } catch (e) {}
+                // Smart DOM Agent-Completion & Approval Observer (attaches once document.body is ready)
+                function attachAgentObserver() {
+                  if (window.__agPulseDomObserverAttached || !document.body) { return; }
+                  var host = (location.hostname || '').toLowerCase();
+                  if (host.indexOf('accounts.google.') !== -1 || host.indexOf('signin.') !== -1) {
+                    return;
+                  }
+                  window.__agPulseDomObserverAttached = true;
+                  window.__agPulseBootAt = Date.now();
+                  window.__agPulseLastNotifiedAt = 0;
+
+                  var graceUntil = Date.now() + 4000;
+                  var lastHref = location.href;
+                  var isWorking = false;
+                  var workStartedAt = 0;
+                  var lastActivityAt = 0;
+                  var lastTextLen = (document.body.innerText || '').length;
+                  var streamTicks = 0;
+                  var lastStreamTickAt = 0;
+                  var seenApprovalKeys = {};
+                  var baselineCaptured = false;
+                  var lastWorkedMarkerCount = 0;
+
+                  function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) { return false; }
+                    var r = el.getBoundingClientRect();
+                    return r.width > 4 && r.height > 4;
+                  }
+
+                  function countWorkedMarkers(text) {
+                    var matches = text.match(/\b(Worked|Thought)\s+for\s+\d+\s*[smh]/gi);
+                    return matches ? matches.length : 0;
+                  }
+
+                  function collectApprovalButtons() {
+                    var found = [];
+                    var nodes = document.querySelectorAll('button, [role="button"]');
+                    for (var i = 0; i < nodes.length; i++) {
+                      var el = nodes[i];
+                      if (!isVisible(el) || el.disabled) { continue; }
+                      var label = ((el.innerText || el.textContent || '') + '').trim();
+                      if (label.length === 0 || label.length > 28) { continue; }
+                      if (/^(approve|accept|accept all|allow|allow once|allow always|run|run command|proceed|confirm)$/i.test(label)) {
+                        var ctx = '';
+                        var parent = el.parentElement && el.parentElement.parentElement;
+                        if (parent && parent.innerText) {
+                          ctx = parent.innerText.replace(/\s+/g, ' ').trim().slice(0, 140);
+                        }
+                        found.push({ label: label, key: label.toLowerCase() + '|' + ctx.slice(0, 60), context: ctx });
+                      }
                     }
-                    return Promise.resolve();
-                  };
-                }
+                    return found;
+                  }
 
-                if (navigator.permissions && typeof navigator.permissions.query === 'function') {
-                  var origQuery = navigator.permissions.query.bind(navigator.permissions);
-                  navigator.permissions.query = function(desc) {
-                    if (desc && desc.name === 'notifications') {
-                      return Promise.resolve({ state: 'granted', onchange: null });
+                  function hasActiveWorkIndicator() {
+                    var busy = document.querySelector('[aria-busy="true"], [role="progressbar"]');
+                    if (busy && isVisible(busy)) { return true; }
+                    var btns = document.querySelectorAll('button, [role="button"]');
+                    for (var i = 0; i < btns.length; i++) {
+                      var b = btns[i];
+                      if (!isVisible(b) || b.disabled) { continue; }
+                      var meta = (
+                        (b.getAttribute('aria-label') || '') + ' ' +
+                        (b.getAttribute('title') || '') + ' ' +
+                        (b.getAttribute('data-testid') || '') + ' ' +
+                        (b.innerText || '')
+                      ).trim();
+                      if (/\b(stop generating|stop response|stop agent|cancel generation|abort)\b/i.test(meta) || /^stop$/i.test(meta)) {
+                        return true;
+                      }
                     }
-                    return origQuery(desc);
-                  };
-                }
+                    return false;
+                  }
 
-                window.addEventListener('antigravity:notify', function(ev) {
-                  var detail = (ev && ev.detail) || {};
-                  emitNativeNotification(detail.title || 'Antigravity Agent', {
-                    body: detail.body || detail.message || '',
-                    tag: detail.tag || ''
+                  function extractLatestSnippet() {
+                    try {
+                      var blocks = document.querySelectorAll('main p, main li, [role="main"] p, article p, [class*="message" i] p, [class*="response" i] p, p');
+                      for (var i = blocks.length - 1; i >= 0; i--) {
+                        var el = blocks[i];
+                        if (!isVisible(el)) { continue; }
+                        var txt = (el.innerText || '').replace(/\s+/g, ' ').trim();
+                        if (txt.length >= 18 && !/^ask anything/i.test(txt)) {
+                          return txt.slice(0, 180);
+                        }
+                      }
+                    } catch (e) {}
+                    return 'Your remote Antigravity agent finished responding. Tap to view.';
+                  }
+
+                  function inspectState() {
+                    try {
+                      var now = Date.now();
+                      if (location.href !== lastHref) {
+                        lastHref = location.href;
+                        graceUntil = now + 3500;
+                        isWorking = false;
+                        workStartedAt = 0;
+                        streamTicks = 0;
+                        baselineCaptured = false;
+                        return;
+                      }
+
+                      var bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
+                      var textLen = bodyText.length;
+                      var workedCount = countWorkedMarkers(bodyText);
+
+                      if (now < graceUntil) {
+                        lastTextLen = textLen;
+                        lastWorkedMarkerCount = workedCount;
+                        return;
+                      }
+
+                      var approvals = collectApprovalButtons();
+                      if (!baselineCaptured) {
+                        baselineCaptured = true;
+                        lastTextLen = textLen;
+                        lastWorkedMarkerCount = workedCount;
+                        for (var a = 0; a < approvals.length; a++) {
+                          seenApprovalKeys[approvals[a].key] = true;
+                        }
+                        return;
+                      }
+
+                      // 1. Detect newly appearing Approval / Action prompts immediately
+                      for (var j = 0; j < approvals.length; j++) {
+                        var item = approvals[j];
+                        if (!seenApprovalKeys[item.key]) {
+                          seenApprovalKeys[item.key] = true;
+                          if ((now - (window.__agPulseLastNotifiedAt || 0)) > 4000) {
+                            window.__agPulseLastNotifiedAt = now;
+                            emitNativeNotification('Antigravity Needs Approval', {
+                              body: item.context || ('Action required: tap "' + item.label + '" in your session.'),
+                              tag: 'ag_approval_needed'
+                            });
+                          }
+                        }
+                      }
+
+                      // 2. Detect live streaming / active work state
+                      var activeIndicator = hasActiveWorkIndicator();
+                      var delta = textLen - lastTextLen;
+                      if (delta > 16 && delta < 4000) {
+                        if ((now - lastStreamTickAt) > 5000) {
+                          streamTicks = 1;
+                        } else if ((now - lastStreamTickAt) >= 450) {
+                          streamTicks += 1;
+                        }
+                        lastStreamTickAt = now;
+                        lastActivityAt = now;
+                      }
+                      lastTextLen = textLen;
+
+                      var workedIncreased = workedCount > lastWorkedMarkerCount;
+                      if (workedIncreased) {
+                        lastWorkedMarkerCount = workedCount;
+                        lastActivityAt = now;
+                      }
+
+                      if (activeIndicator || streamTicks >= 3 || workedIncreased) {
+                        if (!isWorking) {
+                          isWorking = true;
+                          workStartedAt = now;
+                        }
+                        lastActivityAt = now;
+                      } else if (isWorking) {
+                        var workedDuration = now - workStartedAt;
+                        var idleDuration = now - lastActivityAt;
+                        if (idleDuration >= 2800) {
+                          isWorking = false;
+                          streamTicks = 0;
+                          if (workedDuration >= 1800 && (now - (window.__agPulseLastNotifiedAt || 0)) > 6000) {
+                            window.__agPulseLastNotifiedAt = now;
+                            emitNativeNotification('Antigravity Agent Finished', {
+                              body: extractLatestSnippet(),
+                              tag: 'ag_agent_finished'
+                            });
+                          }
+                        }
+                      }
+                    } catch (e) {}
+                  }
+
+                  var throttleTimer = null;
+                  var observer = new MutationObserver(function() {
+                    if (throttleTimer) { return; }
+                    throttleTimer = setTimeout(function() {
+                      throttleTimer = null;
+                      inspectState();
+                    }, 900);
                   });
-                });
+                  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+                  setInterval(inspectState, 1600);
+                }
+
+                if (document.body) {
+                  attachAgentObserver();
+                } else {
+                  document.addEventListener('DOMContentLoaded', attachAgentObserver, { once: true });
+                }
               } catch (e) {}
             })();
         """.trimIndent()

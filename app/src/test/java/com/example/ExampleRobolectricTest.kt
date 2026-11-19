@@ -330,8 +330,6 @@ class ExampleRobolectricTest {
             it.copy(
                 floatingHandleXFraction = 0.85f,
                 floatingHandleYFraction = 0.72f,
-                developerName = "Solomon Bukie",
-                developerGithub = "solomondev",
                 isMaterialYouDynamicEnabled = true,
                 isFrostedGlassEnabled = false
             )
@@ -339,8 +337,10 @@ class ExampleRobolectricTest {
         val reloaded = AppearancePreferencesManager(context).settings.value
         assertEquals(0.85f, reloaded.floatingHandleXFraction, 0.001f)
         assertEquals(0.72f, reloaded.floatingHandleYFraction, 0.001f)
-        assertEquals("Solomon Bukie", reloaded.developerName)
-        assertEquals("solomondev", reloaded.developerGithub)
+        // Developer attribution is strictly locked & immutable
+        assertEquals("Solomon Ogar Bukie", reloaded.developerName)
+        assertEquals("solomonogarbukie@gmail.com", reloaded.developerEmail)
+        assertEquals("IceCool30", reloaded.developerGithub)
         assertTrue(reloaded.isMaterialYouDynamicEnabled)
         assertFalse(reloaded.isFrostedGlassEnabled)
 
@@ -473,13 +473,29 @@ class ExampleRobolectricTest {
         assertNull(PulseNotificationManager.parseWebNotificationConsolePayload("Normal console.log message"))
         assertNull(PulseNotificationManager.parseWebNotificationConsolePayload(PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX + "{invalid"))
 
-        // Verify app notification preference defaults to true and persists
+        // Verify app notification preference defaults and persistence
         val defaultSettings = AppearanceSettings()
         assertTrue(defaultSettings.isApprovalNotificationsEnabled)
         assertTrue(defaultSettings.isAppEventNotificationsEnabled)
+        assertFalse(defaultSettings.isNotifyOnlyInBackground)
+
+        // Verify foreground suppression behavior for background-only alert mode
+        PulseNotificationManager.isAppInForeground = true
+        assertFalse(PulseNotificationManager.shouldSuppressForForeground(onlyWhenBackground = false))
+        assertTrue(PulseNotificationManager.shouldSuppressForForeground(onlyWhenBackground = true))
+        PulseNotificationManager.isAppInForeground = false
+        assertFalse(PulseNotificationManager.shouldSuppressForForeground(onlyWhenBackground = true))
+        PulseNotificationManager.isAppInForeground = true
 
         val manager = AppearancePreferencesManager(context)
-        manager.update { it.copy(isAppEventNotificationsEnabled = false) }
-        assertFalse(AppearancePreferencesManager(context).settings.value.isAppEventNotificationsEnabled)
+        manager.update {
+            it.copy(
+                isAppEventNotificationsEnabled = false,
+                isNotifyOnlyInBackground = true
+            )
+        }
+        val reloaded = AppearancePreferencesManager(context).settings.value
+        assertFalse(reloaded.isAppEventNotificationsEnabled)
+        assertTrue(reloaded.isNotifyOnlyInBackground)
     }
 }
