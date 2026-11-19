@@ -4,32 +4,31 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B%20(API%2024%2B)-3DDC84.svg)](https://www.android.com/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.4-7F52FF.svg)](https://kotlinlang.org/)
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20%2B%20Material%20You-4285F4.svg)](https://developer.android.com/compose)
-[![Download APK](https://img.shields.io/badge/Download-APK%20v1.0.0-FFC799.svg?style=flat&logo=android&logoColor=000000)](releases/AntigravityPulse-v1.0.0.apk?raw=true)
+[![Download APK](https://img.shields.io/badge/Download-APK%20via%20Releases-FFC799.svg?style=flat&logo=android&logoColor=000000)](https://github.com/IceCool30/antigravity-pulse/releases/latest)
 
 **Antigravity Pulse** is a fast, fullscreen-first open-source Android companion designed for connecting to remote desktop sessions over HTTPS/WSS from your phone. Built with Kotlin, Jetpack Compose, **Material You dynamic colors**, and **subtle frosted glass surfaces** on a true `#000000` OLED dark interface, it keeps your active remote session pinned in RAM with zero reloads, provides a compact translucent movable control handle, supports native Android file uploads, and syncs your saved hosts and reusable prompts across devices.
 
 ---
 
-## Install Directly on Your Android Phone (1-Tap Download)
+## Install Directly on Your Android Phone
 
-You do **not** need Android Studio, a computer, or any build tools to install Antigravity Pulse. A pre-built, ready-to-install Android APK is included directly in this repository:
+You do **not** need Android Studio or a computer to install Antigravity Pulse. You can download and install the APK directly from this repository's GitHub Releases page:
 
-### Option 1: Direct 1-Tap APK Download (Recommended)
-1. On your Android phone, tap the link below to download the APK directly:
-   - **[Download AntigravityPulse-v1.0.0.apk (Direct Download)](releases/AntigravityPulse-v1.0.0.apk?raw=true)**
-   - *(Mirror / File View: [releases/AntigravityPulse-v1.0.0.apk](releases/AntigravityPulse-v1.0.0.apk) • [SHA-256 Checksum](releases/AntigravityPulse-v1.0.0.apk.sha256))*
-2. Open the downloaded `.apk` file from your notification shade or Files app.
-3. If Android prompts you, tap **Settings** and enable **Allow from this source** for your browser or file manager, then tap **Install**.
-4. Launch **Antigravity Pulse** from your home screen.
+### Option 1: Direct APK Download (Recommended)
+1. Open this repository's **[Releases](https://github.com/IceCool30/antigravity-pulse/releases/latest)** page on your Android phone.
+2. Under **Assets**, tap the **`.apk`** file to download it.
+3. Open the downloaded `.apk` file from your notification shade or Files app.
+4. If Android prompts you, tap **Settings** and enable **Allow from this source** for your browser or file manager, then tap **Install**.
+5. Launch **Antigravity Pulse** from your home screen.
 
-### Option 2: GitHub Releases & Obtainium
-If you also publish tagged versions on the **[Releases](https://github.com/IceCool30/antigravity-pulse/releases)** page, [Obtainium](https://github.com/ImranR98/Obtainium) users can add this repository URL to track future updates automatically.
-
-### Verify APK Integrity (Optional)
-Verify your downloaded APK against the bundled SHA-256 checksum:
-```bash
-cd releases && sha256sum -c AntigravityPulse-v1.0.0.apk.sha256
-```
+### Option 2: Automatic Updates with Obtainium
+If you use [Obtainium](https://github.com/ImranR98/Obtainium) to track open-source Android apps from GitHub:
+1. Tap **Add App** in Obtainium.
+2. Paste this repository URL:
+   ```text
+   https://github.com/IceCool30/antigravity-pulse
+   ```
+3. Tap **Add** → **Install** to receive automatic notifications whenever a new release APK is published.
 
 ---
 
@@ -83,8 +82,7 @@ Antigravity Pulse follows a clean **MVVM** architecture written 100% in Kotlin:
 
 ### Project Structure
 ```text
-├── releases/                  # Ready-to-install direct-download Android APK & SHA-256 checksum
-├── .github/workflows/         # Optional CI & GitHub Release APK workflows
+├── .github/ISSUE_TEMPLATE/    # Bug report & feature request templates
 ├── app/src/main/java/com/example/
 │   ├── MainActivity.kt        # Root activity, biometric gate, file picker & fullscreen scaffold
 │   ├── data/
@@ -141,16 +139,11 @@ gradle :app:testDebugUnitTest
 
 ## Publishing Releases (100% Free — No GitHub Actions Required)
 
-### Option A: Manual GitHub Release Upload (Works on All Accounts, $0 Cost)
-GitHub Releases binary hosting is **100% free** and works even if GitHub Actions is paused or disabled on your account:
-1. Build or export your APK (`AntigravityPulse-v1.0.0.apk`).
-2. Open your repository on GitHub → click **Releases** (right sidebar) → **Create a new release**.
-3. Create tag `v1.0.0`, enter release notes, and drag & drop **`AntigravityPulse-v1.0.0.apk`** into the **Attach binaries** area.
+GitHub Releases binary hosting is **100% free** (up to 2 GB per file) and works on every GitHub account without GitHub Actions:
+1. Export or build the `.apk` file.
+2. Open your repository on GitHub → click **Releases** → **Create a new release**.
+3. Create tag `v1.0.0`, add release notes, and attach your `.apk` under **Attach binaries**.
 4. Click **Publish release** — Android users (and Obtainium) can immediately download and install the APK directly on their phones.
-
-### Option B: Optional Automated GitHub Actions Workflow
-If GitHub Actions is enabled on your account, pushing a tag (`git tag v1.0.0 && git push origin v1.0.0`) or running **Actions → Build & Publish Release APK** automatically runs the test suite, builds a signed APK + SHA-256 checksum, and publishes the GitHub Release.
-- *(Optional)* Configure custom release signing secrets under **Settings → Secrets and variables → Actions**: `KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD`.
 
 ---
 

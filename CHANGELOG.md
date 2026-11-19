@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Optional Biometric App Lock (Fingerprint / Face / Device PIN) with `FLAG_SECURE` screen privacy protection.
 - Toggleable **Material You Dynamic Color** and **Frosted Glass Surfaces** in Settings alongside 12 dark color presets, custom hex color pickers, contrast modes, font family selector, and font size controls.
 - About Developer profile card in Settings with direct Email and GitHub links.
-- Bundled ready-to-install direct-download APK (`releases/AntigravityPulse-v1.0.0.apk`) with SHA-256 checksum for 1-tap installation directly from GitHub.
+- Open-source documentation (`README.md`, `CONTRIBUTING.md`, `SECURITY.md`, MIT `LICENSE`) and GitHub Releases distribution guide.
 
 ---
 Authored by **Solomon Ogar Bukie** ([@IceCool30](https://github.com/IceCool30)).
