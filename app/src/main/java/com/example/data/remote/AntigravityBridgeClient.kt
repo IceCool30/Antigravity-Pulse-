@@ -2,11 +2,13 @@ package com.example.data.remote
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
@@ -16,6 +18,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.example.BuildConfig
+import com.example.notifications.PulseNotificationManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -700,6 +703,13 @@ object RetainedWebViewManager {
      */
     var onShowFileChooserHandler: ((ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams?) -> Boolean)? = null
 
+    /**
+     * Activity-registered callback receiving sanitized remote PWA web notifications
+     * (emitted via `window.Notification`, `ServiceWorkerRegistration.showNotification`,
+     * or `antigravity:notify` custom events) so Android delivers them natively.
+     */
+    var onWebNotificationReceived: ((title: String, body: String, tag: String) -> Unit)? = null
+
     fun isSafeHttpUrl(url: String): Boolean {
         val clean = url.trim().lowercase()
         return clean.startsWith("https://") || clean.startsWith("http://")
@@ -805,6 +815,20 @@ object RetainedWebViewManager {
                     filePathCallback.onReceiveValue(null)
                     return false
                 }
+
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                    val raw = consoleMessage?.message()
+                    if (raw != null && raw.startsWith(PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX)) {
+                        if (hasActiveLoadedSession()) {
+                            val parsed = PulseNotificationManager.parseWebNotificationConsolePayload(raw)
+                            if (parsed != null) {
+                                onWebNotificationReceived?.invoke(parsed.title, parsed.body, parsed.tag)
+                            }
+                        }
+                        return true
+                    }
+                    return super.onConsoleMessage(consoleMessage)
+                }
             }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
@@ -814,6 +838,13 @@ object RetainedWebViewManager {
                     val targetUrl = request?.url?.toString().orEmpty()
                     // Block non-HTTP(S) schemes (e.g., file://, content://, javascript:, intent:, data:)
                     return !isSafeHttpUrl(targetUrl)
+                }
+
+                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                    super.onPageStarted(view, url, favicon)
+                    if (!url.isNullOrBlank() && isSafeHttpUrl(url)) {
+                        injectWebNotificationBridge(view)
+                    }
                 }
 
                 override fun onReceivedSslError(
@@ -829,6 +860,9 @@ object RetainedWebViewManager {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     flushCookies()
+                    if (!url.isNullOrBlank() && isSafeHttpUrl(url)) {
+                        injectWebNotificationBridge(view)
+                    }
                     injectMobileLayoutFix(view)
                     if (domLagBoosterActive) {
                         injectDomLagOptimizer(view)
@@ -983,6 +1017,109 @@ object RetainedWebViewManager {
         target.post {
             try {
                 target.scrollTo(0, target.scrollY)
+                target.evaluateJavascript(js, null)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Polyfills the browser Web Notifications API (`window.Notification`,
+     * `ServiceWorkerRegistration.prototype.showNotification`, and `navigator.permissions`)
+     * inside Android WebView so the remote Antigravity PWA delivers agent completion and
+     * approval notifications straight through Android's native notification system without
+     * exposing any `addJavascriptInterface` attack surface.
+     */
+    fun injectWebNotificationBridge(webView: WebView? = pinnedWebView) {
+        val target = webView ?: return
+        val prefix = PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX
+        val js = """
+            (function() {
+              try {
+                if (window.__agPulseNotifyShimmed) { return; }
+                window.__agPulseNotifyShimmed = true;
+
+                function emitNativeNotification(title, options) {
+                  try {
+                    var opts = options || {};
+                    var payload = {
+                      title: String(title || 'Antigravity Agent').slice(0, 120),
+                      body: String(opts.body || '').slice(0, 360),
+                      tag: String(opts.tag || '').slice(0, 64)
+                    };
+                    console.info('$prefix' + JSON.stringify(payload));
+                  } catch (e) {}
+                }
+
+                function PulseNotification(title, options) {
+                  this.title = String(title || 'Antigravity Agent');
+                  this.body = String((options && options.body) || '');
+                  this.tag = String((options && options.tag) || '');
+                  this.onclick = null;
+                  this.onclose = null;
+                  this.onerror = null;
+                  this.onshow = null;
+                  emitNativeNotification(this.title, options);
+                }
+                PulseNotification.permission = 'granted';
+                PulseNotification.maxActions = 2;
+                PulseNotification.requestPermission = function(callback) {
+                  if (typeof callback === 'function') {
+                    try { callback('granted'); } catch (e) {}
+                  }
+                  return Promise.resolve('granted');
+                };
+                PulseNotification.prototype.close = function() {
+                  if (typeof this.onclose === 'function') {
+                    try { this.onclose(); } catch (e) {}
+                  }
+                };
+                PulseNotification.prototype.addEventListener = function() {};
+                PulseNotification.prototype.removeEventListener = function() {};
+
+                try {
+                  Object.defineProperty(window, 'Notification', {
+                    value: PulseNotification,
+                    writable: true,
+                    configurable: true
+                  });
+                } catch (e) {
+                  window.Notification = PulseNotification;
+                }
+
+                if (window.ServiceWorkerRegistration && window.ServiceWorkerRegistration.prototype) {
+                  var origShow = window.ServiceWorkerRegistration.prototype.showNotification;
+                  window.ServiceWorkerRegistration.prototype.showNotification = function(title, options) {
+                    emitNativeNotification(title, options);
+                    if (typeof origShow === 'function') {
+                      try { return origShow.call(this, title, options); } catch (e) {}
+                    }
+                    return Promise.resolve();
+                  };
+                }
+
+                if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+                  var origQuery = navigator.permissions.query.bind(navigator.permissions);
+                  navigator.permissions.query = function(desc) {
+                    if (desc && desc.name === 'notifications') {
+                      return Promise.resolve({ state: 'granted', onchange: null });
+                    }
+                    return origQuery(desc);
+                  };
+                }
+
+                window.addEventListener('antigravity:notify', function(ev) {
+                  var detail = (ev && ev.detail) || {};
+                  emitNativeNotification(detail.title || 'Antigravity Agent', {
+                    body: detail.body || detail.message || '',
+                    tag: detail.tag || ''
+                  });
+                });
+              } catch (e) {}
+            })();
+        """.trimIndent()
+        target.post {
+            try {
                 target.evaluateJavascript(js, null)
             } catch (_: Exception) {
             }

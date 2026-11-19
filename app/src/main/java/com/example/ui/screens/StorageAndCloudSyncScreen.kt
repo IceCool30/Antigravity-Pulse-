@@ -75,6 +75,7 @@ import com.example.data.cloud.onGoogleSignInClicked
 import com.example.data.cloud.signOutFromGoogle
 import com.example.data.local.AntigravityDao
 import com.example.data.local.ServerProfileEntity
+import com.example.notifications.PulseNotificationManager
 import com.example.ui.theme.CrimsonError
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
@@ -474,7 +475,20 @@ private fun AuthenticatedCloudSyncPanel(
     var newPromptBody by rememberSaveable { mutableStateOf("") }
     var showAddPromptForm by rememberSaveable { mutableStateOf(false) }
 
-    val isFrostedGlass = LocalAppearanceSettings.current.isFrostedGlassEnabled
+    val context = LocalContext.current
+    val currentAppearance = LocalAppearanceSettings.current
+    val isFrostedGlass = currentAppearance.isFrostedGlassEnabled
+
+    LaunchedEffect(syncMessage) {
+        val msg = syncMessage?.trim().orEmpty()
+        if (msg.isNotEmpty() && currentAppearance.isAppEventNotificationsEnabled) {
+            PulseNotificationManager.showAppActivityNotification(
+                context = context,
+                title = "Antigravity Cloud Sync",
+                body = msg
+            )
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // Card A: Cloud Account & Synced Remote Hosts
         val cloudCardShape = RoundedCornerShape(20.dp)

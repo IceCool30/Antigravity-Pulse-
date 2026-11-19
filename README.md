@@ -49,6 +49,8 @@ If you use [Obtainium](https://github.com/ImranR98/Obtainium) to track open-sour
   Clicking the `+` / upload button inside your remote session opens Android's native Storage Access Framework document picker (`ACTION_OPEN_DOCUMENT`) with multi-file selection and **zero broad storage permissions**.
 - **Cloud Sync (Saved Hosts & Reusable Prompts)**
   Sign in with Google via Jetpack Credential Manager to back up and restore your saved remote host bookmarks and reusable prompt templates using Firebase Firestore.
+- **Native Agent & App Notifications**
+  Bridges remote PWA notifications (`window.Notification` & `ServiceWorkerRegistration.showNotification`) straight into native Android heads-up notifications so your phone alerts you the moment your agent finishes a task or asks for approval—plus dedicated channels for host connections, security warnings, and Cloud Sync activity. Tapping any notification jumps directly back into your active session without reloading.
 - **Biometric App Lock**
   Optionally protect saved host URLs and auth tokens with Android Fingerprint, Face Unlock, or Device PIN/Pattern.
 - **Material You + Subtle Frosted Glass UI (`#000000` OLED)**
@@ -160,7 +162,8 @@ Antigravity Pulse is hardened with defense-in-depth protections for everyday use
 | --- | --- |
 | `INTERNET` / `ACCESS_NETWORK_STATE` | Connects to the remote workstation URL you configure and optional Cloud Sync. |
 | `CAMERA` *(runtime, on-demand)* | Requested only when you tap **Scan QR Code** to pair with a remote host. |
-| **No Storage, Mic, or Notification Permissions** | File selection uses Android's built-in system picker (`ACTION_OPEN_DOCUMENT`) with zero storage permissions. |
+| `POST_NOTIFICATIONS` *(runtime, Android 13+)* | Delivers native agent completion alerts, host connection updates, and Cloud Sync notifications. |
+| **No Storage or Microphone Permissions** | File selection uses Android's built-in system picker (`ACTION_OPEN_DOCUMENT`) with zero storage permissions. |
 
 ---
 

@@ -1,8 +1,10 @@
 package com.example
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.MimeTypeMap
@@ -33,14 +35,20 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -110,6 +118,7 @@ import com.example.data.cloud.configureAppCheck
 import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
 import com.example.data.remote.RetainedWebViewManager
+import com.example.notifications.PulseNotificationManager
 import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
 import com.example.ui.screens.AppearanceSettingsSheet
@@ -130,6 +139,7 @@ class MainActivity : FragmentActivity() {
 
         // STEP 1: Mandatory Firebase App Check initialization with launch intent before any UI or Firebase calls
         configureAppCheck(this, intent)
+        PulseNotificationManager.ensureChannelsCreated(this)
 
         enableEdgeToEdge()
 
@@ -475,6 +485,66 @@ fun AntigravityPulseApp(
         }
     }
 
+    // Android 13+ (API 33+) runtime notification permission launcher
+    var pendingSendTestNotification by remember { mutableStateOf(false) }
+    var hasPromptedNotificationPermission by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && pendingSendTestNotification) {
+            pendingSendTestNotification = false
+            PulseNotificationManager.showTestNotification(context)
+            antigravityViewModel.recordWebViewBridgeEvent("Test notification delivered to your phone!")
+        } else if (!granted && pendingSendTestNotification) {
+            pendingSendTestNotification = false
+            antigravityViewModel.recordWebViewBridgeEvent("Enable Notifications in Android App Settings to receive agent alerts.")
+        }
+    }
+
+    fun requestNotificationPermissionIfNeeded(sendTestAfterGrant: Boolean = false) {
+        if (PulseNotificationManager.hasNotificationPermission(context)) {
+            if (sendTestAfterGrant) {
+                PulseNotificationManager.showTestNotification(context)
+                antigravityViewModel.recordWebViewBridgeEvent("Test notification delivered to your phone!")
+            }
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pendingSendTestNotification = sendTestAfterGrant
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Request Android 13+ notification permission once when notifications are enabled
+    LaunchedEffect(Unit) {
+        if (!hasPromptedNotificationPermission &&
+            (appearance.isApprovalNotificationsEnabled || appearance.isAppEventNotificationsEnabled) &&
+            !PulseNotificationManager.hasNotificationPermission(context) &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        ) {
+            hasPromptedNotificationPermission = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Bridge remote PWA Web Notifications (window.Notification & ServiceWorker.showNotification)
+    // straight into native Android heads-up notifications
+    DisposableEffect(appearance.isApprovalNotificationsEnabled) {
+        RetainedWebViewManager.onWebNotificationReceived = { title, body, tag ->
+            if (appearance.isApprovalNotificationsEnabled) {
+                PulseNotificationManager.showAgentNotification(
+                    context = context,
+                    title = title,
+                    body = body,
+                    tag = tag
+                )
+            }
+        }
+        onDispose {
+            RetainedWebViewManager.onWebNotificationReceived = null
+        }
+    }
+
     // Keep auto-reconnect policy synced with persisted settings
     LaunchedEffect(appearance.isAutoReconnectEnabled) {
         antigravityViewModel.setAutoReconnectEnabled(appearance.isAutoReconnectEnabled)
@@ -528,6 +598,13 @@ fun AntigravityPulseApp(
         )
         RetainedWebViewManager.reloadOrForceLoadUrl(cleanUrl, telemetry.domLagBoosterEnabled)
         selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
+        if (appearance.isAppEventNotificationsEnabled) {
+            PulseNotificationManager.showConnectionNotification(
+                context = context,
+                title = "Connected to $cleanName",
+                body = cleanUrl
+            )
+        }
     }
 
     if (showAppearanceSheet) {
@@ -548,6 +625,8 @@ fun AntigravityPulseApp(
                     onSelectPreset = onSelectPreset,
                     onResetPreset = onResetPreset,
                     onToggleAutoReconnect = antigravityViewModel::setAutoReconnectEnabled,
+                    onRequestNotificationPermission = { requestNotificationPermissionIfNeeded(false) },
+                    onSendTestNotification = { requestNotificationPermissionIfNeeded(true) },
                     onClose = { showAppearanceSheet = false }
                 )
             }
@@ -586,6 +665,11 @@ fun AntigravityPulseApp(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(surface)
+                            .windowInsetsPadding(
+                                WindowInsets.statusBars
+                                    .union(WindowInsets.displayCutout)
+                                    .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                            )
                     ) {
                         AntigravityRemoteTopBar(
                             serverProfiles = serverProfiles,
@@ -764,7 +848,18 @@ fun AntigravityPulseApp(
                                         )
                                     },
                                     onOpenQrScanner = { showGlobalQrScanner = true },
-                                    onJsBridgeEvent = antigravityViewModel::recordWebViewBridgeEvent
+                                    onJsBridgeEvent = { eventMsg ->
+                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                        if (appearance.isAppEventNotificationsEnabled &&
+                                            eventMsg.contains("SSL", ignoreCase = true)
+                                        ) {
+                                            PulseNotificationManager.showConnectionNotification(
+                                                context = context,
+                                                title = "Antigravity Security Warning",
+                                                body = eventMsg
+                                            )
+                                        }
+                                    }
                                 )
 
                                 PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
@@ -1188,42 +1283,42 @@ private fun AntigravityRemoteTopBar(
             IconButton(
                 onClick = onOpenQrScanner,
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(44.dp)
                     .testTag("top_qr_scan_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.QrCodeScanner,
                     contentDescription = "Scan QR Code",
                     tint = accent,
-                    modifier = Modifier.size(19.dp)
+                    modifier = Modifier.size(21.dp)
                 )
             }
 
             IconButton(
                 onClick = onOpenAppearance,
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(44.dp)
                     .testTag("top_appearance_settings_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
                     contentDescription = "Settings",
                     tint = secondaryFg,
-                    modifier = Modifier.size(19.dp)
+                    modifier = Modifier.size(21.dp)
                 )
             }
 
             IconButton(
                 onClick = onHideBarsFullscreen,
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(44.dp)
                     .testTag("top_hide_bars_fullscreen_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Fullscreen,
                     contentDescription = "Hide Top & Bottom Bars for Fullscreen",
                     tint = accent,
-                    modifier = Modifier.size(21.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }

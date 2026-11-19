@@ -22,6 +22,7 @@ import com.example.data.remote.AntigravityBridgeClient
 import com.example.data.remote.BridgeConnectionState
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
+import com.example.notifications.PulseNotificationManager
 import com.example.ui.screens.parseAntigravityPairingPayload
 import com.example.ui.theme.AntigravityPulseTheme
 import com.example.ui.theme.AppearancePreferencesManager
@@ -453,5 +454,32 @@ class ExampleRobolectricTest {
         // Explicit reset clears back to welcome screen
         RetainedWebViewManager.resetToWelcomeScreen()
         assertFalse(RetainedWebViewManager.hasActiveLoadedSession())
+    }
+
+    @Test
+    fun `web notification bridge parses sanitizes and persists app notification settings`() {
+        PulseNotificationManager.resetDedupForTests()
+        PulseNotificationManager.ensureChannelsCreated(context)
+
+        val validRaw = PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX +
+            """{"title":"Agent Finished\nBuild","body":"All 12 tests passed cleanly.\tReady for review.","tag":"agent_done_1"}"""
+        val parsed = PulseNotificationManager.parseWebNotificationConsolePayload(validRaw)
+        assertNotNull(parsed)
+        assertEquals("Agent Finished Build", parsed!!.title)
+        assertEquals("All 12 tests passed cleanly. Ready for review.", parsed.body)
+        assertEquals("agent_done_1", parsed.tag)
+
+        // Normal console logs or malformed payloads must be ignored safely
+        assertNull(PulseNotificationManager.parseWebNotificationConsolePayload("Normal console.log message"))
+        assertNull(PulseNotificationManager.parseWebNotificationConsolePayload(PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX + "{invalid"))
+
+        // Verify app notification preference defaults to true and persists
+        val defaultSettings = AppearanceSettings()
+        assertTrue(defaultSettings.isApprovalNotificationsEnabled)
+        assertTrue(defaultSettings.isAppEventNotificationsEnabled)
+
+        val manager = AppearancePreferencesManager(context)
+        manager.update { it.copy(isAppEventNotificationsEnabled = false) }
+        assertFalse(AppearancePreferencesManager(context).settings.value.isAppEventNotificationsEnabled)
     }
 }

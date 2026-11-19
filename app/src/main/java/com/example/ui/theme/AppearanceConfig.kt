@@ -133,7 +133,8 @@ data class AppearanceSettings(
     val developerGithub: String = "IceCool30",
     val lastActiveRemoteUrl: String = "",
     val isMaterialYouDynamicEnabled: Boolean = true,
-    val isFrostedGlassEnabled: Boolean = true
+    val isFrostedGlassEnabled: Boolean = true,
+    val isAppEventNotificationsEnabled: Boolean = true
 ) {
     val backgroundColor: Color
         get() = if (themeMode == AntigravityThemeMode.LIGHT) {
@@ -245,7 +246,8 @@ class AppearancePreferencesManager(context: Context) {
             developerGithub = prefs.getString("developer_github_v2", "IceCool30") ?: "IceCool30",
             lastActiveRemoteUrl = prefs.getString("last_active_remote_url", "") ?: "",
             isMaterialYouDynamicEnabled = prefs.getBoolean("material_you_dynamic_enabled", true),
-            isFrostedGlassEnabled = prefs.getBoolean("frosted_glass_enabled", true)
+            isFrostedGlassEnabled = prefs.getBoolean("frosted_glass_enabled", true),
+            isAppEventNotificationsEnabled = prefs.getBoolean("app_event_notifications_enabled", true)
         )
     }
 
@@ -275,6 +277,7 @@ class AppearancePreferencesManager(context: Context) {
             .putString("last_active_remote_url", next.lastActiveRemoteUrl)
             .putBoolean("material_you_dynamic_enabled", next.isMaterialYouDynamicEnabled)
             .putBoolean("frosted_glass_enabled", next.isFrostedGlassEnabled)
+            .putBoolean("app_event_notifications_enabled", next.isAppEventNotificationsEnabled)
             .apply()
     }
 

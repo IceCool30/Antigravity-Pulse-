@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Native Android system file picker (`ACTION_OPEN_DOCUMENT`) wired to the WebView `+` file attachment trigger with multi-file selection and zero storage permissions.
 - Built-in CameraX + ML Kit QR code scanner and multi-host profile switcher.
 - Google Sign-In Cloud Sync (Firebase Authentication + Firestore) for backing up and restoring saved remote hosts and reusable prompt presets with strict per-user isolation.
+- Native Android notifications bridging remote PWA agent alerts (`window.Notification` & `ServiceWorker.showNotification`) plus dedicated channels for host connections, security warnings, and Cloud Sync activity, with an in-app **Test Alert** button.
 - Optional Biometric App Lock (Fingerprint / Face / Device PIN) with `FLAG_SECURE` screen privacy protection.
 - Toggleable **Material You Dynamic Color** and **Frosted Glass Surfaces** in Settings alongside 12 dark color presets, custom hex color pickers, contrast modes, font family selector, and font size controls.
 - About Developer profile card in Settings with direct Email and GitHub links.

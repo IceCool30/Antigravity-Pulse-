@@ -38,6 +38,8 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.AlertDialog
@@ -96,6 +98,8 @@ fun AppearanceSettingsSheet(
     onSelectPreset: (AntigravityThemePreset) -> Unit,
     onResetPreset: () -> Unit,
     onToggleAutoReconnect: (Boolean) -> Unit = {},
+    onRequestNotificationPermission: () -> Unit = {},
+    onSendTestNotification: () -> Unit = {},
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
@@ -701,6 +705,152 @@ fun AppearanceSettingsSheet(
                             ),
                             modifier = Modifier.testTag("auto_reconnect_switch")
                         )
+                    }
+                }
+            }
+
+            // SECTION 1C: Native Phone Notifications (Agent Bridge + App Events)
+            item {
+                Text(
+                    text = "Notifications",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = fg,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .frostedGlass(
+                            shape = RoundedCornerShape(20.dp),
+                            baseColor = surface,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrostedGlass,
+                            fillAlpha = 0.82f,
+                            tintAlpha = 0.06f,
+                            borderAlpha = 0.58f
+                        )
+                ) {
+                    // Remote Agent & PWA Notifications
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.NotificationsActive,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Remote Agent Notifications",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Deliver native Android alerts whenever your remote Antigravity agent finishes a task or needs approval",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Switch(
+                            checked = settings.isApprovalNotificationsEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(isApprovalNotificationsEnabled = enabled) }
+                                if (enabled) {
+                                    onRequestNotificationPermission()
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = bg,
+                                checkedTrackColor = accent
+                            ),
+                            modifier = Modifier.testTag("agent_notifications_switch")
+                        )
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Overall App, Connection & Cloud Sync Notifications
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.NotificationsNone,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "App & Cloud Sync Alerts",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Notify on host connections, Cloud Sync backups, restores, and security warnings",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Switch(
+                            checked = settings.isAppEventNotificationsEnabled,
+                            onCheckedChange = { enabled ->
+                                onUpdateSettings { it.copy(isAppEventNotificationsEnabled = enabled) }
+                                if (enabled) {
+                                    onRequestNotificationPermission()
+                                }
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = bg,
+                                checkedTrackColor = accent
+                            ),
+                            modifier = Modifier.testTag("app_notifications_switch")
+                        )
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Send Test Notification
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Verify phone notification banner & sound",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = secondaryFg,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = onSendTestNotification,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("send_test_notification_button")
+                        ) {
+                            Text("Test Alert", color = accent, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
