@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B%20(API%2024%2B)-3DDC84.svg)](https://www.android.com/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.4-7F52FF.svg)](https://kotlinlang.org/)
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20%2B%20Material%20You-4285F4.svg)](https://developer.android.com/compose)
-[![Download APK](https://img.shields.io/badge/Download-APK%20via%20Releases-FFC799.svg?style=flat&logo=android&logoColor=000000)](https://github.com/IceCool30/antigravity-pulse/releases/latest)
+[![Download APK](https://img.shields.io/badge/Download-APK%20via%20Releases-FFC799.svg?style=flat&logo=android&logoColor=000000)](https://github.com/IceCool30/Antigravity-Pulse-/releases/latest)
 
 **Antigravity Pulse** is a fast, fullscreen-first open-source Android companion designed for connecting to remote desktop sessions over HTTPS/WSS from your phone. Built with Kotlin, Jetpack Compose, **Material You dynamic colors**, and **subtle frosted glass surfaces** on a true `#000000` OLED dark interface, it keeps your active remote session pinned in RAM with zero reloads, provides a compact translucent movable control handle, supports native Android file uploads, and syncs your saved hosts and reusable prompts across devices.
 
@@ -15,7 +15,7 @@
 You do **not** need Android Studio or a computer to install Antigravity Pulse. You can download and install the APK directly from this repository's GitHub Releases page:
 
 ### Option 1: Direct APK Download (Recommended)
-1. Open this repository's **[Releases](https://github.com/IceCool30/antigravity-pulse/releases/latest)** page on your Android phone.
+1. Open this repository's **[Releases](https://github.com/IceCool30/Antigravity-Pulse-/releases/latest)** page on your Android phone.
 2. Under **Assets**, tap the **`.apk`** file to download it.
 3. Open the downloaded `.apk` file from your notification shade or Files app.
 4. If Android prompts you, tap **Settings** and enable **Allow from this source** for your browser or file manager, then tap **Install**.
@@ -26,7 +26,7 @@ If you use [Obtainium](https://github.com/ImranR98/Obtainium) to track open-sour
 1. Tap **Add App** in Obtainium.
 2. Paste this repository URL:
    ```text
-   https://github.com/IceCool30/antigravity-pulse
+   https://github.com/IceCool30/Antigravity-Pulse-
    ```
 3. Tap **Add** → **Install** to receive automatic notifications whenever a new release APK is published.
 
@@ -110,8 +110,8 @@ Antigravity Pulse follows a clean **MVVM** architecture written 100% in Kotlin:
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/IceCool30/antigravity-pulse.git
-cd antigravity-pulse
+git clone https://github.com/IceCool30/Antigravity-Pulse-.git
+cd Antigravity-Pulse-
 ```
 
 ### 2. Optional Environment Configuration

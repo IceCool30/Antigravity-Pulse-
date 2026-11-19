@@ -12,8 +12,8 @@ Thank you for your interest in contributing to **Antigravity Pulse**! This proje
 
 1. **Fork & Clone** the repository:
    ```bash
-   git clone https://github.com/<your-username>/antigravity-pulse.git
-   cd antigravity-pulse
+   git clone https://github.com/<your-username>/Antigravity-Pulse-.git
+   cd Antigravity-Pulse-
    ```
 2. **Create a Feature Branch**:
    ```bash
