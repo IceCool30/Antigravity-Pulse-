@@ -35,23 +35,23 @@ enum class GeminiCopilotModel(
     val badgeLabel: String,
     val description: String
 ) {
-    GEMINI_4_ARGON(
-        modelId = "gemini-4-argon",
-        displayTitle = "Gemini 4 Argon",
-        badgeLabel = "DEEP & INTERACTIVE",
-        description = "Complex interactive engineering, architecture & deep reasoning"
-    ),
     GEMINI_3_8_FLASH(
         modelId = "gemini-3.8-flash",
         displayTitle = "Gemini 3.8 Flash",
-        badgeLabel = "GENERAL",
-        description = "Balanced frontier speed & coding accuracy"
+        badgeLabel = "DEFAULT • FAST",
+        description = "Balanced frontier speed & coding accuracy (no billing required)"
     ),
     GEMINI_3_5_FLASH_LITE(
         modelId = "gemini-3.5-flash-lite",
         displayTitle = "Gemini 3.5 Flash-Lite",
         badgeLabel = "ULTRA FAST",
         description = "Sub-second shell one-liners & quick syntax fixes"
+    ),
+    GEMINI_4_ARGON(
+        modelId = "gemini-4-argon",
+        displayTitle = "Gemini 4 Argon",
+        badgeLabel = "PRO • BILLING",
+        description = "Deep reasoning (requires Firebase Blaze billing; auto-falls back to 3.8 Flash)"
     )
 }
 
@@ -94,7 +94,7 @@ class CopilotViewModel(
     val messages: StateFlow<List<CopilotMessageEntity>> = dao.observeCopilotMessages()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    private val _selectedModel = MutableStateFlow(GeminiCopilotModel.GEMINI_4_ARGON)
+    private val _selectedModel = MutableStateFlow(GeminiCopilotModel.GEMINI_3_8_FLASH)
     val selectedModel: StateFlow<GeminiCopilotModel> = _selectedModel.asStateFlow()
 
     private val _selectedPersona = MutableStateFlow(CopilotRolePersona.PROMPT_ARCHITECT)
@@ -168,12 +168,12 @@ class CopilotViewModel(
             )
 
             _chatUiState.value = CopilotChatUiState.Loading
-            val accumulatedText = StringBuilder()
+            var usedModel = modelSpec
 
-            try {
-                val generativeModel = buildChatModel(modelSpec, persona)
+            suspend fun executeStream(targetModel: GeminiCopilotModel): String {
+                val accumulatedText = StringBuilder()
+                val generativeModel = buildChatModel(targetModel, persona)
                 val chat = generativeModel.startChat(history = priorHistory)
-
                 withTimeout(60_000L) {
                     chat.sendMessageStream(cleanPrompt).collect { chunk ->
                         val chunkText = chunk.text.orEmpty()
@@ -181,15 +181,36 @@ class CopilotViewModel(
                         _chatUiState.value = CopilotChatUiState.Streaming(accumulatedText.toString())
                     }
                 }
+                return accumulatedText.toString().trim()
+            }
 
-                val finalResponse = accumulatedText.toString().trim()
+            try {
+                val finalResponse = try {
+                    executeStream(modelSpec)
+                } catch (primaryErr: Exception) {
+                    if (primaryErr is CancellationException && primaryErr !is TimeoutCancellationException) {
+                        throw primaryErr
+                    }
+                    if (modelSpec != GeminiCopilotModel.GEMINI_3_8_FLASH) {
+                        Log.w(
+                            TAG,
+                            "Model ${modelSpec.modelId} unavailable (${primaryErr.localizedMessage}); falling back to gemini-3.8-flash"
+                        )
+                        usedModel = GeminiCopilotModel.GEMINI_3_8_FLASH
+                        _selectedModel.value = GeminiCopilotModel.GEMINI_3_8_FLASH
+                        executeStream(GeminiCopilotModel.GEMINI_3_8_FLASH)
+                    } else {
+                        throw primaryErr
+                    }
+                }
+
                 if (finalResponse.isNotEmpty()) {
                     dao.insertCopilotMessage(
                         CopilotMessageEntity(
                             id = "cop_m_${System.currentTimeMillis()}",
                             senderRole = "MODEL",
                             text = finalResponse,
-                            modelUsed = modelSpec.modelId,
+                            modelUsed = usedModel.modelId,
                             rolePersona = persona.title,
                             timestampEpoch = System.currentTimeMillis()
                         )

@@ -29,9 +29,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -91,6 +94,7 @@ fun CopilotAndImageStudioScreen(
     onGenerateOrEditImage: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
     val surface = appearance.surfaceColor
@@ -326,22 +330,47 @@ fun CopilotAndImageStudioScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 OutlinedButton(
-                                    onClick = { onForwardToAntigravityAgent(msg.text) },
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(msg.text))
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.testTag("copy_copilot_${msg.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy text",
+                                        tint = secondaryFg,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Copy",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = secondaryFg
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(msg.text))
+                                        onForwardToAntigravityAgent(msg.text)
+                                    },
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                     modifier = Modifier.testTag("forward_to_agent_${msg.id}")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.RocketLaunch,
-                                        contentDescription = "Send to Antigravity Agent",
+                                        contentDescription = "Insert into Antigravity Remote",
                                         tint = accent,
                                         modifier = Modifier.size(15.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Send to Antigravity Agent",
+                                        text = "Insert into Remote",
                                         style = MaterialTheme.typography.labelLarge,
                                         color = accent
                                     )
@@ -716,11 +745,11 @@ fun CopilotAndImageStudioScreen(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.RocketLaunch,
-                                            contentDescription = "Send Asset Spec to Antigravity Agent",
+                                            contentDescription = "Insert Asset Spec into Remote",
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Send Asset Spec to Antigravity Agent", fontWeight = FontWeight.Bold)
+                                        Text("Insert Asset Spec into Remote", fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }

@@ -2,7 +2,6 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,12 +14,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,13 +46,13 @@ fun RetainedWebViewBridgeScreen(
     telemetry: BridgeTelemetry,
     isFullscreenBarsHidden: Boolean,
     onToggleDomBooster: (Boolean) -> Unit,
+    onSaveAndConnectUrl: (String) -> Unit,
+    onOpenQrScanner: () -> Unit,
     onJsBridgeEvent: (String) -> Unit
 ) {
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
     val surface = appearance.surfaceColor
-    val border = appearance.borderColor
-    val secondaryFg = appearance.secondaryTextColor
     val accent = appearance.accentColor
 
     var urlInput by rememberSaveable(telemetry.activeEndpoint) {
@@ -63,7 +64,7 @@ fun RetainedWebViewBridgeScreen(
             .fillMaxSize()
             .background(bg)
     ) {
-        // Collapsible URL & DOM Lag Booster Toolbar (Automatically hidden in Fullscreen Mode!)
+        // Collapsible URL, QR, Re-Center & DOM Lag Booster Toolbar (Hidden in Fullscreen Mode)
         AnimatedVisibility(visible = !isFullscreenBarsHidden) {
             Column(
                 modifier = Modifier
@@ -78,19 +79,38 @@ fun RetainedWebViewBridgeScreen(
                     OutlinedTextField(
                         value = urlInput,
                         onValueChange = { urlInput = it },
-                        label = { Text("Pinned WebView Bridge URL / Tunnel") },
+                        label = { Text("Antigravity Remote URL") },
                         singleLine = true,
                         modifier = Modifier
                             .weight(1f)
                             .testTag("webview_url_input")
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    IconButton(
+                        onClick = onOpenQrScanner,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(appearance.elevatedSurfaceColor)
+                            .testTag("webview_scan_qr_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = "Scan Antigravity QR Code",
+                            tint = accent
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
                     IconButton(
                         onClick = {
+                            val clean = urlInput.trim()
                             RetainedWebViewManager.reloadOrForceLoadUrl(
-                                url = urlInput.trim(),
+                                url = clean,
                                 domLagBooster = telemetry.domLagBoosterEnabled
                             )
+                            if (RetainedWebViewManager.isSafeHttpUrl(clean)) {
+                                onSaveAndConnectUrl(clean)
+                            }
                         },
                         modifier = Modifier
                             .size(48.dp)
@@ -100,7 +120,7 @@ fun RetainedWebViewBridgeScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = "Load or Refresh Bridge URL",
+                            contentDescription = "Load or Refresh Remote URL",
                             tint = Color(0xFF070708)
                         )
                     }
@@ -125,8 +145,8 @@ fun RetainedWebViewBridgeScreen(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    if (telemetry.domLagBoosterEnabled) "DOM Lag Booster: ON"
-                                    else "DOM Lag Booster: OFF"
+                                    if (telemetry.domLagBoosterEnabled) "Lag Booster: ON"
+                                    else "Lag Booster: OFF"
                                 )
                             }
                         },
@@ -137,16 +157,27 @@ fun RetainedWebViewBridgeScreen(
                         modifier = Modifier.testTag("dom_lag_booster_chip")
                     )
 
-                    Text(
-                        text = "Singleton RAM Lock Active",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = secondaryFg
-                    )
+                    OutlinedButton(
+                        onClick = {
+                            RetainedWebViewManager.injectMobileLayoutFix()
+                            onJsBridgeEvent("Re-centered Antigravity Remote mobile layout")
+                        },
+                        modifier = Modifier.testTag("webview_recenter_layout_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CenterFocusStrong,
+                            contentDescription = "Re-Center Layout",
+                            tint = accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Re-Center", color = accent)
+                    }
                 }
             }
         }
 
-        // Memory-Pinned WebView Instance (expands edge-to-edge when bars are hidden)
+        // Full-bleed Memory-Pinned WebView Instance (0dp horizontal padding to prevent right-side offset)
         AndroidView(
             factory = { context ->
                 RetainedWebViewManager.obtainPinnedWebView(
@@ -162,13 +193,6 @@ fun RetainedWebViewBridgeScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(if (isFullscreenBarsHidden) 0.dp else 8.dp)
-                .clip(RoundedCornerShape(if (isFullscreenBarsHidden) 0.dp else 12.dp))
-                .border(
-                    width = if (isFullscreenBarsHidden) 0.dp else 1.dp,
-                    color = if (isFullscreenBarsHidden) Color.Transparent else border,
-                    shape = RoundedCornerShape(if (isFullscreenBarsHidden) 0.dp else 12.dp)
-                )
                 .testTag("retained_webview_container")
         )
     }

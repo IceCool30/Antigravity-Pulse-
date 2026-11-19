@@ -87,41 +87,40 @@ val CompleteAntigravityGuideSteps = listOf(
     ),
     GuideStepInfo(
         stepNumber = 2,
-        title = "Paste & Connect Your Host in Seconds",
-        subtitle = "Connect via the interactive box below, the top Session Pill, or the Web Bridge tab",
+        title = "Scan QR or Paste Your Remote Link",
+        subtitle = "Connect via the Quick-Connect box below or from the movable floating side panel",
         bullets = listOf(
-            "Direct Web Bridge: Open the 'Web Bridge' tab, paste your Antigravity Remote URL at the top, and tap Refresh (↻). Your exact remote browser interface will load inside a hardware-accelerated, memory-pinned container.",
-            "Native Host Profile: Tap the session dropdown pill [ ● ... ▾ ] at the top-left of the screen and choose 'Configure Remote Host' to save your URL and optional pairing token.",
-            "Or use the Quick-Connect form directly below to connect in one tap right now!"
+            "Instant QR Pairing: Tap 'Scan QR Code' inside the movable floating side panel (or below) to scan your desktop Antigravity Remote QR code.",
+            "Direct URL Load: Paste your Antigravity Remote https:// or http:// link and tap 'Open in Remote'. Your host is automatically saved locally and ready to back up to Google Cloud.",
+            "Perfect Mobile Fit: If a web page ever drifts horizontally, tap 'Re-Center Layout' in the side panel to snap the mobile viewport cleanly into place."
         )
     ),
     GuideStepInfo(
         stepNumber = 3,
-        title = "Zero-Reload Pinned RAM & DOM Lag Booster",
-        subtitle = "Switch apps or minimize your phone without ever reloading your workspace",
+        title = "Fullscreen by Default + Movable Side Panel",
+        subtitle = "Opens directly in 100% fullscreen with a draggable floating control handle",
         bullets = listOf(
-            "Singleton RAM Lock: Unlike mobile browsers that evict tabs and force slow reloads when you minimize them, Antigravity Pulse pins your active WebView and WebSocket in Android application memory.",
-            "DOM Lag Booster: Keep 'DOM Lag Booster: ON' enabled in the Web Bridge tab to strip heavy CSS transitions and offscreen layout reflows so scrolling long agent conversations is instant.",
-            "0ms Local Room Cache: Agent sessions, file diffs, and terminal logs are cached locally in on-device SQLite so they open in 0ms even offline."
+            "Drag Anywhere: Touch and drag the floating handle pill anywhere on screen (left, right, top, or bottom) — it remembers your exact preferred spot across app restarts.",
+            "All Controls in One Tap: Tap the handle to open the movable panel for QR Scan, Switch Host, Re-Center Layout, Live Voice, AI Copilot, Cloud Sync, Settings, or Show Bars.",
+            "Move Open Panel Too: Drag the top handle bar of the open panel anytime to slide it out of your way."
         )
     ),
     GuideStepInfo(
         stepNumber = 4,
-        title = "Distraction-Free Fullscreen Mode (⛶)",
-        subtitle = "Hide both the top and bottom bars for a 100% fullscreen remote interface",
+        title = "AI Copilot & Pause-Friendly Live Voice",
+        subtitle = "Draft prompts with Gemini 3.8 Flash or speak hands-free without cutoffs",
         bullets = listOf(
-            "Enter Fullscreen: Tap the Fullscreen icon (⛶) in the top-right bar (or toggle 'Distraction-Free Fullscreen' inside ⚙️ Settings). Both the top header and bottom navigation tabs will slide away completely.",
-            "Summon Controls Anytime: While in Fullscreen Mode, tap the subtle floating handle on the left edge of your screen to switch tabs, open Appearance Settings, or tap 'Show Bars' to pin the bars back."
+            "AI Copilot (Gemini 3.8 Flash): Brainstorm architecture, refine coding prompts, or generate UI mockups, then tap 'Insert into Remote' to drop text right into Antigravity.",
+            "Live Voice: Speak naturally with generous pause tolerance (no premature cutoffs) and insert spoken prompts or Gemini answers straight into Remote."
         )
     ),
     GuideStepInfo(
         stepNumber = 5,
-        title = "Add Context (+), Live Voice & Themes",
-        subtitle = "Attach Files/Folders/Mentions/Browser/Drive, talk via gemini-3.8-live, and customize themes",
+        title = "Google Cloud Sync & Custom Themes",
+        subtitle = "Sync your Remote hosts & reusable prompt snippets across devices",
         bullets = listOf(
-            "Add Context (+ Button): Tap '+' next to the prompt box to attach Files (or phone screenshots), Folder trees, @Mentions, slash Actions, live Chrome MCP Browser state, or Google Drive specs.",
-            "Gemini Live Voice (🎙️ Icon): Tap the waveform icon next to the prompt box to start a real-time voice conversation with gemini-3.8-live and dispatch commands to Antigravity hands-free.",
-            "12 Official Theme Presets: Tap ⚙️ in the top bar to switch between Default Dark, Legacy Dark, Catppuccin, Dracula, Everforest, Gruvbox Material, Monokai, Nord, One Dark Pro, Tokyo Night, Solarized Dark, and Vesper."
+            "Cloud Sync: Sign in with Google to back up your saved Remote Host URLs and build a synced library of reusable Antigravity prompt snippets.",
+            "12 Official Theme Presets: Open Settings from the movable side panel to customize colors, fonts, Biometric App Lock, or toggle top/bottom bars."
         )
     )
 )
@@ -136,7 +135,6 @@ fun ConnectionGuideScreen(
     activeEndpointUrl: String,
     onUpdateSettings: ((AppearanceSettings) -> AppearanceSettings) -> Unit,
     onQuickConnectWebBridge: (hostName: String, url: String, token: String) -> Unit,
-    onQuickConnectNativeSessions: (hostName: String, url: String, token: String) -> Unit,
     onOpenAppearanceSettings: () -> Unit,
     onCloseGuide: () -> Unit
 ) {
@@ -361,55 +359,33 @@ fun ConnectionGuideScreen(
                             )
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Button(
+                            onClick = {
+                                val cleanUrl = hostUrl.trim()
+                                if (cleanUrl.isBlank()) {
+                                    quickConnectFeedback = "Please paste your Antigravity remote URL above first."
+                                    return@Button
+                                }
+                                val cleanName = hostLabel.trim().ifBlank { "Antigravity Remote" }
+                                RetainedWebViewManager.reloadOrForceLoadUrl(cleanUrl, true)
+                                onQuickConnectWebBridge(cleanName, cleanUrl, hostToken.trim())
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = accent,
+                                contentColor = Color(0xFF070708)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("guide_connect_web_bridge_button")
                         ) {
-                            Button(
-                                onClick = {
-                                    val cleanUrl = hostUrl.trim()
-                                    if (cleanUrl.isBlank()) {
-                                        quickConnectFeedback = "Please paste your Antigravity remote URL above first."
-                                        return@Button
-                                    }
-                                    val cleanName = hostLabel.trim().ifBlank { "Antigravity Remote" }
-                                    RetainedWebViewManager.reloadOrForceLoadUrl(cleanUrl, true)
-                                    onQuickConnectWebBridge(cleanName, cleanUrl, hostToken.trim())
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = accent,
-                                    contentColor = Color(0xFF070708)
-                                ),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("guide_connect_web_bridge_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Language,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Open in Web Bridge", fontWeight = FontWeight.Bold)
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    val cleanUrl = hostUrl.trim()
-                                    if (cleanUrl.isBlank()) {
-                                        quickConnectFeedback = "Please paste your Antigravity remote URL above first."
-                                        return@OutlinedButton
-                                    }
-                                    val cleanName = hostLabel.trim().ifBlank { "Antigravity Remote" }
-                                    quickConnectFeedback = "Saved '$cleanName'! Opening Native Sessions..."
-                                    onQuickConnectNativeSessions(cleanName, cleanUrl, hostToken.trim())
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("guide_connect_native_sessions_button")
-                            ) {
-                                Text("Save & Open Sessions", color = fg)
-                            }
+                            Icon(
+                                imageVector = Icons.Default.Language,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Save & Open in Remote", fontWeight = FontWeight.Bold)
                         }
                     }
                 }

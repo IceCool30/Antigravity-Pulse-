@@ -609,7 +609,16 @@ class AntigravityViewModel(
         bridgeClient.setDomLagBooster(enabled)
         if (enabled) {
             RetainedWebViewManager.injectDomLagOptimizer()
+        } else {
+            RetainedWebViewManager.removeDomLagOptimizer()
         }
+    }
+
+    fun insertPromptIntoRemoteWebView(prompt: String) {
+        val clean = prompt.trim()
+        if (clean.isEmpty()) return
+        RetainedWebViewManager.injectPromptIntoWebView(clean)
+        _statusBanner.value = "Inserted prompt into Antigravity Remote (and copied to clipboard)"
     }
 
     fun recordWebViewBridgeEvent(message: String) {
@@ -742,7 +751,11 @@ class AuthenticatedCloudSyncViewModel(
 
             _isSyncing.value = false
             _syncMessage.value = failureMessage
-                ?: "Synced ${localProfiles.size} server profiles & ${localSessions.size} sessions to Firestore"
+                ?: if (localProfiles.isEmpty()) {
+                    "No local remote hosts yet — scan a QR code or paste a Remote URL first, then tap Backup."
+                } else {
+                    "Backed up ${localProfiles.size} remote host(s) to Google Cloud Firestore"
+                }
         }
     }
 

@@ -1,6 +1,10 @@
 package com.example
 
 import android.content.Context
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -422,5 +426,100 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("explain_error_copilot_err_log_1").performClick()
         assertEquals("npm test", debuggedCommand)
         assertTrue(debuggedOutput.contains("AssertionError"))
+    }
+
+    @Test
+    fun `app defaults to fullscreen with persisted movable side panel position and clean mobile UA`() {
+        val defaultSettings = AppearanceSettings()
+        assertTrue(defaultSettings.isFullscreenBarsHidden)
+        assertFalse(defaultSettings.showStartupGuideOnLaunch)
+        assertEquals(0f, defaultSettings.floatingHandleXFraction, 0.001f)
+        assertEquals(0.42f, defaultSettings.floatingHandleYFraction, 0.001f)
+
+        val manager = AppearancePreferencesManager(context)
+        manager.update {
+            it.copy(
+                floatingHandleXFraction = 0.85f,
+                floatingHandleYFraction = 0.72f
+            )
+        }
+        val reloaded = AppearancePreferencesManager(context).settings.value
+        assertEquals(0.85f, reloaded.floatingHandleXFraction, 0.001f)
+        assertEquals(0.72f, reloaded.floatingHandleYFraction, 0.001f)
+
+        val rawWvUa = "Mozilla/5.0 (Linux; Android 15; Pixel 9; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Mobile Safari/537.36"
+        val cleanUa = RetainedWebViewManager.buildCleanMobileUserAgent(rawWvUa)
+        assertFalse(cleanUa.contains("; wv"))
+        assertFalse(cleanUa.contains("Version/4.0 "))
+        assertTrue(cleanUa.contains("Chrome/131.0.0.0"))
+    }
+
+    @Test
+    fun `CopilotViewModel defaults to billing-free Gemini 3_8 Flash`() {
+        val copilotVm = com.example.viewmodel.CopilotViewModel(database.dao())
+        assertEquals(
+            com.example.viewmodel.GeminiCopilotModel.GEMINI_3_8_FLASH,
+            copilotVm.selectedModel.value
+        )
+        assertEquals("gemini-3.8-flash", copilotVm.selectedModel.value.modelId)
+    }
+
+    @Test
+    fun `MovableFloatingControlPanel opens on tap and triggers recenter and tab actions`() {
+        var expanded = false
+        var recentered = false
+        var selectedTab = 0
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                val isExp = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(expanded) }
+                com.example.ui.components.MovableFloatingControlPanel(
+                    isExpanded = isExp.value,
+                    xFraction = 0f,
+                    yFraction = 0.42f,
+                    tabs = listOf(
+                        com.example.ui.components.FloatingPanelTabItem(0, "Remote", Icons.Default.Language, "nav_tab_bridge"),
+                        com.example.ui.components.FloatingPanelTabItem(1, "AI Copilot", Icons.Default.AutoAwesome, "nav_tab_copilot"),
+                        com.example.ui.components.FloatingPanelTabItem(2, "Cloud Sync", Icons.Default.CloudSync, "nav_tab_sync")
+                    ),
+                    selectedTabIndex = selectedTab,
+                    activeHostLabel = "My Workstation",
+                    surface = Color(0xFF141418),
+                    elevated = Color(0xFF1E1E24),
+                    border = Color(0xFF2D2D36),
+                    fg = Color.White,
+                    secondaryFg = Color.LightGray,
+                    accent = Color(0xFFFFC799),
+                    onExpandedChange = {
+                        expanded = it
+                        isExp.value = it
+                    },
+                    onPersistPositionFraction = { _, _ -> },
+                    onSelectTab = { selectedTab = it },
+                    onOpenHostSwitcher = {},
+                    onOpenQrScanner = {},
+                    onRecenterWebLayout = { recentered = true },
+                    onReloadWeb = {},
+                    onOpenLiveVoice = {},
+                    onShowBars = {},
+                    onOpenSettings = {},
+                    onOpenGuide = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("floating_fullscreen_edge_handle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("floating_fullscreen_edge_handle").performClick()
+        composeTestRule.waitForIdle()
+
+        assertTrue(expanded)
+        composeTestRule.onNodeWithTag("floating_quick_menu_overlay").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("floating_panel_drag_header").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("floating_quick_recenter_layout").performClick()
+        composeTestRule.waitForIdle()
+
+        assertTrue(recentered)
+        assertFalse(expanded)
     }
 }

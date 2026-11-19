@@ -693,10 +693,10 @@ fun GeminiLiveVoiceModal(
         )
     }
 
-    // Active Firebase AI Logic LiveSession reference
-    var activeLiveSession by remember { mutableStateOf<LiveSession?>(null) }
+    // Active SpeechRecognizer reference so tapping Mic while listening submits cleanly without cutting off
+    var activeRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
 
-    // Android TextToSpeech for audible voice responses alongside LiveSession
+    // Android TextToSpeech for crisp, fast audible voice responses (stopped cleanly before mic listens)
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(context) {
         var engine: TextToSpeech? = null
@@ -708,7 +708,9 @@ fun GeminiLiveVoiceModal(
         ttsEngine = engine
         onDispose {
             try {
-                activeLiveSession?.stopAudioConversation()
+                activeRecognizer?.cancel()
+                activeRecognizer?.destroy()
+                activeRecognizer = null
             } catch (_: Exception) {
             }
             engine?.stop()
@@ -716,37 +718,12 @@ fun GeminiLiveVoiceModal(
         }
     }
 
-    // Helper that connects `Firebase.ai.liveModel("gemini-3.8-live")` for bidirectional audio
-    // AND processes spoken turns with real-time streaming response + audible synthesis
-    fun connectGeminiLiveApiSession() {
-        scope.launch {
-            liveStatusText = "Connecting to gemini-3.8-live (Live API)..."
-            try {
-                val liveModel = Firebase.ai(backend = GenerativeBackend.googleAI()).liveModel(
-                    modelName = "gemini-3.8-live",
-                    generationConfig = liveGenerationConfig {
-                        responseModality = ResponseModality.AUDIO
-                        speechConfig = SpeechConfig(voice = Voice(selectedVoiceName))
-                    },
-                    systemInstruction = content {
-                        text(
-                            "You are the real-time voice copilot for Antigravity Pulse connected to workspace '$activeWorkspaceName' at $activeEndpointUrl. Keep spoken answers concise, natural, and helpful."
-                        )
-                    }
-                )
-
-                val session = liveModel.connect()
-                activeLiveSession = session
-                isLiveSessionConnected = true
-                session.startAudioConversation()
-                liveStatusText = "LIVE • gemini-3.8-live bidirectional audio active (Voice: $selectedVoiceName)"
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "LiveSession bidirectional audio note: ${e.localizedMessage}", e)
-                isLiveSessionConnected = true
-                liveStatusText = "LIVE • Voice Stream Active (Voice: $selectedVoiceName)"
-            }
+    fun releaseRecognizer() {
+        try {
+            activeRecognizer?.destroy()
+        } catch (_: Exception) {
+        } finally {
+            activeRecognizer = null
         }
     }
 
@@ -837,17 +814,43 @@ fun GeminiLiveVoiceModal(
         }
     }
 
-    // SpeechRecognizer helper for capturing live voice on Android
+    // SpeechRecognizer helper with generous pause tolerance (4s silence window) and zero mic contention
     fun startMicrophoneRecognition(ctx: Context) {
-        if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
-            isListeningMic = false
-            liveStatusText = "Live session connected (`gemini-3.8-live`). Tap any voice prompt below or speak into microphone."
-            connectGeminiLiveApiSession()
+        // Stop any speaking TTS first so the microphone never hears the speaker
+        ttsEngine?.stop()
+        isModelSpeaking = false
+
+        // If already listening, tapping Mic cleanly finishes & submits what was spoken so far
+        if (isListeningMic && activeRecognizer != null) {
+            liveStatusText = "Finishing speech..."
+            try {
+                activeRecognizer?.stopListening()
+            } catch (_: Exception) {
+                isListeningMic = false
+                val captured = partialSpokenText
+                partialSpokenText = ""
+                if (captured.isNotBlank()) {
+                    processSpokenUtterance(captured)
+                }
+                releaseRecognizer()
+            }
             return
         }
 
+        if (!SpeechRecognizer.isRecognitionAvailable(ctx)) {
+            isListeningMic = false
+            liveStatusText = "Voice recognition unavailable on this device. Tap a quick prompt below."
+            return
+        }
+
+        releaseRecognizer()
+
         try {
             val recognizer = SpeechRecognizer.createSpeechRecognizer(ctx)
+            activeRecognizer = recognizer
+            isLiveSessionConnected = true
+            partialSpokenText = ""
+
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(
                     RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -855,12 +858,17 @@ fun GeminiLiveVoiceModal(
                 )
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                // Generous silence thresholds so natural pauses mid-sentence do NOT cut off speech
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 6000L)
             }
 
             recognizer.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
                     isListeningMic = true
-                    liveStatusText = "Listening... Speak to gemini-3.8-live"
+                    liveStatusText = "Listening... Take your time, tap Mic again when done"
                 }
 
                 override fun onBeginningOfSpeech() {
@@ -872,29 +880,40 @@ fun GeminiLiveVoiceModal(
 
                 override fun onEndOfSpeech() {
                     isListeningMic = false
+                    liveStatusText = "Processing your voice..."
                 }
 
                 override fun onError(error: Int) {
                     isListeningMic = false
-                    if (partialSpokenText.isNotBlank()) {
-                        val captured = partialSpokenText
-                        partialSpokenText = ""
+                    val captured = partialSpokenText.trim()
+                    partialSpokenText = ""
+                    releaseRecognizer()
+                    if (captured.isNotBlank()) {
                         processSpokenUtterance(captured)
                     } else {
-                        liveStatusText = "Live Audio Connected (`gemini-3.8-live`). Tap Mic to speak again."
+                        liveStatusText = when (error) {
+                            SpeechRecognizer.ERROR_NO_MATCH,
+                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                                "Didn't catch speech — tap Mic to speak again"
+                            SpeechRecognizer.ERROR_AUDIO ->
+                                "Audio input busy — tap Mic to retry"
+                            else ->
+                                "Ready — tap Mic to speak"
+                        }
                     }
-                    recognizer.destroy()
                 }
 
                 override fun onResults(results: Bundle?) {
                     isListeningMic = false
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val best = matches?.firstOrNull().orEmpty().ifBlank { partialSpokenText }
+                    val best = matches?.firstOrNull().orEmpty().ifBlank { partialSpokenText }.trim()
                     partialSpokenText = ""
+                    releaseRecognizer()
                     if (best.isNotBlank()) {
                         processSpokenUtterance(best)
+                    } else {
+                        liveStatusText = "Ready — tap Mic to speak"
                     }
-                    recognizer.destroy()
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
@@ -904,7 +923,7 @@ fun GeminiLiveVoiceModal(
                         .orEmpty()
                     if (partial.isNotBlank()) {
                         partialSpokenText = partial
-                        liveStatusText = "Hearing: \"$partial\""
+                        liveStatusText = "Listening (tap Mic to send now)..."
                     }
                 }
 
@@ -914,7 +933,8 @@ fun GeminiLiveVoiceModal(
             recognizer.startListening(intent)
         } catch (e: Exception) {
             isListeningMic = false
-            liveStatusText = "Live API active (`gemini-3.8-live`)"
+            releaseRecognizer()
+            liveStatusText = "Ready — tap Mic or choose a quick voice prompt"
         }
     }
 
@@ -923,10 +943,9 @@ fun GeminiLiveVoiceModal(
     ) { granted ->
         hasAudioPermission = granted
         if (granted) {
-            connectGeminiLiveApiSession()
             startMicrophoneRecognition(context)
         } else {
-            liveStatusText = "Microphone permission declined. You can still use interactive Live Voice prompts below."
+            liveStatusText = "Microphone permission declined. You can still use quick voice prompts below."
         }
     }
 
@@ -944,9 +963,10 @@ fun GeminiLiveVoiceModal(
     Dialog(
         onDismissRequest = {
             try {
-                activeLiveSession?.stopAudioConversation()
+                activeRecognizer?.cancel()
             } catch (_: Exception) {
             }
+            releaseRecognizer()
             ttsEngine?.stop()
             onDismiss()
         },
@@ -987,13 +1007,13 @@ fun GeminiLiveVoiceModal(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Gemini Live Voice (gemini-3.8-live)",
+                                text = "Gemini Live Voice",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = fg
                             )
                             Text(
-                                text = "Real-time bidirectional voice & Antigravity tool calling",
+                                text = "Pause-friendly voice assistant & Antigravity Remote inserter",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = secondaryFg
                             )
@@ -1003,9 +1023,10 @@ fun GeminiLiveVoiceModal(
                     IconButton(
                         onClick = {
                             try {
-                                activeLiveSession?.stopAudioConversation()
+                                activeRecognizer?.cancel()
                             } catch (_: Exception) {
                             }
+                            releaseRecognizer()
                             ttsEngine?.stop()
                             onDismiss()
                         },
@@ -1090,9 +1111,6 @@ fun GeminiLiveVoiceModal(
                                 if (!hasAudioPermission) {
                                     audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 } else {
-                                    if (!isLiveSessionConnected) {
-                                        connectGeminiLiveApiSession()
-                                    }
                                     startMicrophoneRecognition(context)
                                 }
                             }
@@ -1144,9 +1162,6 @@ fun GeminiLiveVoiceModal(
                                 if (!hasAudioPermission) {
                                     audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 } else {
-                                    if (!isLiveSessionConnected) {
-                                        connectGeminiLiveApiSession()
-                                    }
                                     startMicrophoneRecognition(context)
                                 }
                             },
@@ -1163,7 +1178,7 @@ fun GeminiLiveVoiceModal(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isListeningMic) "Listening..." else "Tap to Speak (Live API)",
+                                text = if (isListeningMic) "Tap to Send Now" else "Tap to Speak",
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -1172,14 +1187,16 @@ fun GeminiLiveVoiceModal(
                             OutlinedButton(
                                 onClick = {
                                     try {
-                                        activeLiveSession?.stopAudioConversation()
+                                        activeRecognizer?.cancel()
                                     } catch (_: Exception) {
                                     }
+                                    releaseRecognizer()
                                     ttsEngine?.stop()
+                                    partialSpokenText = ""
                                     isListeningMic = false
                                     isModelSpeaking = false
                                     isLiveSessionConnected = false
-                                    liveStatusText = "Live audio paused. Tap Mic to resume."
+                                    liveStatusText = "Voice paused. Tap Mic to speak again."
                                 },
                                 modifier = Modifier.testTag("stop_live_voice_button")
                             ) {
@@ -1319,32 +1336,30 @@ fun GeminiLiveVoiceModal(
                                     )
                                 }
 
-                                if (!isUser) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            onDispatchPromptToAntigravity(turn.text)
+                                            onDismiss()
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                     ) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                onDispatchPromptToAntigravity(turn.text)
-                                                onDismiss()
-                                            },
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.AutoMirrored.Filled.Send,
-                                                contentDescription = null,
-                                                tint = accent,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "Send to Antigravity Session",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = accent
-                                            )
-                                        }
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Send,
+                                            contentDescription = null,
+                                            tint = accent,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Insert into Remote",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = accent
+                                        )
                                     }
                                 }
                             }

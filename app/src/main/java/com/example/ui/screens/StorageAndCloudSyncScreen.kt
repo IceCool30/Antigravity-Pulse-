@@ -17,20 +17,30 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,14 +48,18 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -59,13 +73,11 @@ import com.example.data.cloud.attemptAutoSignIn
 import com.example.data.cloud.authStateFlow
 import com.example.data.cloud.onGoogleSignInClicked
 import com.example.data.cloud.signOutFromGoogle
-import com.example.data.local.AgentSessionEntity
 import com.example.data.local.AntigravityDao
 import com.example.data.local.ServerProfileEntity
 import com.example.ui.theme.CrimsonError
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
-import com.example.ui.theme.NeuralViolet
 import com.example.viewmodel.AuthenticatedCloudSyncViewModel
 import com.example.viewmodel.CloudUiState
 import com.google.firebase.Firebase
@@ -76,10 +88,13 @@ import com.google.firebase.firestore.FirebaseFirestore
 fun StorageAndCloudSyncScreen(
     dao: AntigravityDao,
     localProfiles: List<ServerProfileEntity>,
-    localSessions: List<AgentSessionEntity>,
+    onConnectHostUrl: (name: String, endpointUrl: String, authToken: String) -> Unit,
+    onInsertPromptIntoRemote: (String) -> Unit,
+    onOpenAddHostModal: () -> Unit,
     onClearLocalData: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
     val surface = appearance.surfaceColor
@@ -111,19 +126,19 @@ fun StorageAndCloudSyncScreen(
     }
 
     if (showClearConfirmDialog) {
-        androidx.compose.material3.AlertDialog(
+        AlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
             containerColor = surface,
             title = {
                 Text(
-                    text = "Clear Local Workspace Data?",
+                    text = "Clear Local Saved Hosts & History?",
                     style = MaterialTheme.typography.titleLarge,
                     color = fg
                 )
             },
             text = {
                 Text(
-                    text = "This removes all locally cached server profiles, sessions, messages, file diffs, and terminal logs from this device. Your Google Cloud backups remain untouched.",
+                    text = "This removes all locally saved Remote host URLs and Copilot history from this phone. Your Google Cloud backups remain untouched.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = secondaryFg
                 )
@@ -143,7 +158,7 @@ fun StorageAndCloudSyncScreen(
                 }
             },
             dismissButton = {
-                androidx.compose.material3.TextButton(onClick = { showClearConfirmDialog = false }) {
+                TextButton(onClick = { showClearConfirmDialog = false }) {
                     Text("Cancel", color = secondaryFg)
                 }
             }
@@ -154,61 +169,138 @@ fun StorageAndCloudSyncScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(bg)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 24.dp)
+        contentPadding = PaddingValues(bottom = 28.dp)
     ) {
-        // 1. Local On-Device Room SQLite Status Card (Always Active, Zero Latency)
+        // 1. Saved Local Remote Hosts (Room SQLite — Always Ready)
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = surface),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, EmeraldOnline.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                    .border(1.dp, EmeraldOnline.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
                     .testTag("local_room_storage_card")
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Storage,
-                            contentDescription = "Local Room Storage",
-                            tint = EmeraldOnline,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Local On-Device Storage (Room SQLite)",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = EmeraldOnline
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Storage,
+                                contentDescription = "Saved Remote Hosts",
+                                tint = EmeraldOnline,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Saved Remote Hosts (${localProfiles.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldOnline
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = onOpenAddHostModal,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("sync_add_host_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Add Remote Host",
+                                tint = accent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Host", color = accent, fontWeight = FontWeight.Bold)
+                        }
                     }
+
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "ACTIVE • 0ms Instant Cache (Private & Offline-Ready)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = fg
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Cached locally: ${localProfiles.size} server profiles, ${localSessions.size} agent sessions, diffs, and terminal logs. Minimizing the app never evicts local state.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = secondaryFg
-                    )
-                    if (localProfiles.isNotEmpty() || localSessions.isNotEmpty()) {
+
+                    if (localProfiles.isEmpty()) {
+                        Text(
+                            text = "No Antigravity Remote hosts saved yet. Scan a QR code or paste a Remote URL to save it here and back it up to Google Cloud.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = secondaryFg
+                        )
+                    } else {
+                        localProfiles.forEach { profile ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp)
+                                    .background(elevated, RoundedCornerShape(10.dp))
+                                    .border(
+                                        1.dp,
+                                        if (profile.isSelected) accent.copy(alpha = 0.6f) else border,
+                                        RoundedCornerShape(10.dp)
+                                    )
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = profile.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (profile.isSelected) accent else fg,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = profile.endpointUrl,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = secondaryFg,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        onConnectHostUrl(
+                                            profile.name,
+                                            profile.endpointUrl,
+                                            profile.authToken
+                                        )
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = accent,
+                                        contentColor = Color(0xFF070708)
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Language,
+                                        contentDescription = "Connect",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Open", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(10.dp))
                         OutlinedButton(
                             onClick = { showClearConfirmDialog = true },
                             modifier = Modifier.testTag("clear_local_cache_button")
                         ) {
-                            Text("Reset Local Workspace Data", color = CrimsonError)
+                            Text("Reset Local Saved Data", color = CrimsonError)
                         }
                     }
                 }
             }
         }
 
-        // 2. Cloud Sync Card (Gated behind CredentialManager Google Sign-In)
+        // 2. Google Cloud Sync Card (Firestore Backup for Remote Hosts & Reusable Prompts)
         item {
             val user = currentUser
             if (user == null) {
@@ -230,14 +322,15 @@ fun StorageAndCloudSyncScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Cross-Device Cloud Sync (Firebase Firestore)",
-                                style = MaterialTheme.typography.titleLarge,
+                                text = "Google Cloud Sync (Firestore)",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
                                 color = accent
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Sign in with Google to back up your Antigravity server profiles, session bookmarks, and Copilot prompt library across all your Android devices.",
+                            text = "Sign in with Google to back up your Antigravity Remote host URLs and save a synced library of reusable prompts you can insert into Antigravity in one tap.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = secondaryFg
                         )
@@ -293,7 +386,6 @@ fun StorageAndCloudSyncScreen(
                     }
                 }
             } else {
-                // Authenticated session: Key composition and ViewModel by user.uid
                 key(user.uid) {
                     val cloudViewModel: AuthenticatedCloudSyncViewModel = viewModel(
                         key = user.uid,
@@ -314,10 +406,16 @@ fun StorageAndCloudSyncScreen(
                         userEmail = user.email ?: user.uid,
                         surface = surface,
                         elevated = elevated,
+                        border = border,
                         fg = fg,
                         secondaryFg = secondaryFg,
                         accent = accent,
                         cloudViewModel = cloudViewModel,
+                        onConnectHostUrl = onConnectHostUrl,
+                        onInsertPromptIntoRemote = { promptText ->
+                            clipboardManager.setText(AnnotatedString(promptText))
+                            onInsertPromptIntoRemote(promptText)
+                        },
                         onSignOut = {
                             signOutFromGoogle(
                                 credentialManager = credentialManager,
@@ -336,222 +434,413 @@ private fun AuthenticatedCloudSyncPanel(
     userEmail: String,
     surface: Color,
     elevated: Color,
+    border: Color,
     fg: Color,
     secondaryFg: Color,
     accent: Color,
     cloudViewModel: AuthenticatedCloudSyncViewModel,
+    onConnectHostUrl: (name: String, endpointUrl: String, authToken: String) -> Unit,
+    onInsertPromptIntoRemote: (String) -> Unit,
     onSignOut: () -> Unit
 ) {
     val profilesState by cloudViewModel.cloudProfilesState.collectAsStateWithLifecycle()
-    val sessionsState by cloudViewModel.cloudSessionsState.collectAsStateWithLifecycle()
     val promptsState by cloudViewModel.cloudPromptsState.collectAsStateWithLifecycle()
     val syncMessage by cloudViewModel.syncMessage.collectAsStateWithLifecycle()
     val isSyncing by cloudViewModel.isSyncing.collectAsStateWithLifecycle()
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = surface),
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-            .testTag("authenticated_cloud_panel")
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.CloudDone,
-                        contentDescription = "Signed in with Google",
-                        tint = accent,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "Google Cloud Sync Connected",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = accent
+    var newPromptTitle by rememberSaveable { mutableStateOf("") }
+    var newPromptBody by rememberSaveable { mutableStateOf("") }
+    var showAddPromptForm by rememberSaveable { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Card A: Cloud Account & Synced Remote Hosts
+        Card(
+            colors = CardDefaults.cardColors(containerColor = surface),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                .testTag("authenticated_cloud_panel")
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = "Signed in with Google",
+                            tint = accent,
+                            modifier = Modifier.size(20.dp)
                         )
-                        Text(
-                            text = userEmail,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = secondaryFg
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Google Cloud Sync Active",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = accent
+                            )
+                            Text(
+                                text = userEmail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = secondaryFg,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onSignOut,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("google_sign_out_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Logout,
+                            contentDescription = "Sign Out",
+                            modifier = Modifier.size(15.dp)
                         )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Sign Out")
                     }
                 }
 
-                OutlinedButton(
-                    onClick = onSignOut,
-                    modifier = Modifier.testTag("google_sign_out_button")
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Logout,
-                        contentDescription = "Sign Out",
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Sign Out")
+                    Button(
+                        onClick = { cloudViewModel.syncAllLocalDataToCloud() },
+                        enabled = !isSyncing,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = accent,
+                            contentColor = Color(0xFF070708)
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("sync_local_to_cloud_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudUpload,
+                            contentDescription = "Backup Hosts to Cloud",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            if (isSyncing) "Syncing..." else "Backup Hosts",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (profilesState is CloudUiState.Success) {
+                        val cloudProfiles = (profilesState as CloudUiState.Success).data
+                        if (cloudProfiles.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = { cloudViewModel.restoreCloudProfilesToLocal(cloudProfiles) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("restore_cloud_to_local_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "Restore Hosts to Phone",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Pull Hosts (${cloudProfiles.size})")
+                            }
+                        }
+                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = { cloudViewModel.syncAllLocalDataToCloud() },
-                    enabled = !isSyncing,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = accent,
-                        contentColor = Color(0xFF070708)
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("sync_local_to_cloud_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CloudUpload,
-                        contentDescription = "Backup Local to Cloud",
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+                if (syncMessage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        if (isSyncing) "Syncing..." else "Backup Local to Cloud",
-                        fontWeight = FontWeight.Bold
+                        text = syncMessage.orEmpty(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = EmeraldOnline
                     )
                 }
 
-                if (profilesState is CloudUiState.Success) {
-                    val cloudProfiles = (profilesState as CloudUiState.Success).data
-                    if (cloudProfiles.isNotEmpty()) {
-                        OutlinedButton(
-                            onClick = { cloudViewModel.restoreCloudProfilesToLocal(cloudProfiles) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("restore_cloud_to_local_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Download,
-                                contentDescription = "Restore to Local",
-                                modifier = Modifier.size(16.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = border)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Cloud Synced Remote Hosts
+                when (val pState = profilesState) {
+                    is CloudUiState.Loading -> Text(
+                        "Loading cloud remote hosts...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = secondaryFg
+                    )
+                    is CloudUiState.Error -> Text(
+                        "Cloud Hosts Error: ${pState.message}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = CrimsonError
+                    )
+                    is CloudUiState.Success -> {
+                        Text(
+                            text = "Cloud-Synced Remote Hosts (${pState.data.size})",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = fg
+                        )
+                        if (pState.data.isEmpty()) {
+                            Text(
+                                text = "Tap 'Backup Hosts' above after connecting a Remote URL to sync your hosts across devices.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = secondaryFg,
+                                modifier = Modifier.padding(top = 4.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Pull Cloud (${cloudProfiles.size})")
+                        } else {
+                            pState.data.forEach { cp ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                        .background(elevated, RoundedCornerShape(10.dp))
+                                        .padding(10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = cp.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = fg,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = cp.endpointUrl,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = secondaryFg,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            onConnectHostUrl(cp.name, cp.endpointUrl, cp.authToken)
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("Connect", color = accent, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
 
-            if (syncMessage != null) {
-                Spacer(modifier = Modifier.height(8.dp))
+        // Card B: Cloud-Synced Reusable Prompts Library (1-Tap Insert into Remote WebView!)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = surface),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, border, RoundedCornerShape(14.dp))
+                .testTag("cloud_prompt_library_card")
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.BookmarkAdd,
+                            contentDescription = "Cloud Prompt Library",
+                            tint = accent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Synced Prompt Snippets",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = fg
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { showAddPromptForm = !showAddPromptForm },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("toggle_add_cloud_prompt_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "New Prompt Snippet",
+                            tint = accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (showAddPromptForm) "Close" else "New Prompt",
+                            color = accent,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = syncMessage.orEmpty(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = EmeraldOnline
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Cloud Profiles Snapshot
-            when (val pState = profilesState) {
-                is CloudUiState.Loading -> Text(
-                    "Loading cloud server profiles...",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = "Save your frequently used Antigravity instructions to Firestore and insert them into Remote in one tap.",
+                    style = MaterialTheme.typography.bodySmall,
                     color = secondaryFg
                 )
-                is CloudUiState.Error -> Text(
-                    "Cloud Profile Error: ${pState.message}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CrimsonError
-                )
-                is CloudUiState.Success -> {
-                    Text(
-                        text = "Synced Cloud Profiles (${pState.data.size})",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = fg
+
+                if (showAddPromptForm) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = newPromptTitle,
+                        onValueChange = { newPromptTitle = it },
+                        label = { Text("Snippet Title (e.g., Fix Build & Run Tests)") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("cloud_prompt_title_input")
                     )
-                    pState.data.forEach { cp ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 6.dp)
-                                .background(elevated, RoundedCornerShape(8.dp))
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "${cp.name} (${cp.endpointUrl})",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = fg,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                text = if (cp.lastLatencyMs > 0) "${cp.lastLatencyMs}ms" else "Saved",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = EmeraldOnline
-                            )
-                        }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = newPromptBody,
+                        onValueChange = { newPromptBody = it },
+                        label = { Text("Prompt text to insert into Antigravity") },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("cloud_prompt_body_input")
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            val title = newPromptTitle.trim().ifBlank { "Saved Prompt" }
+                            val body = newPromptBody.trim()
+                            if (body.isNotEmpty()) {
+                                cloudViewModel.bookmarkPromptToCloud(
+                                    title = title,
+                                    promptText = body,
+                                    rolePersona = "Antigravity Remote",
+                                    preferredModel = "gemini-3.8-flash"
+                                )
+                                newPromptTitle = ""
+                                newPromptBody = ""
+                                showAddPromptForm = false
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = accent,
+                            contentColor = Color(0xFF070708)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("save_cloud_prompt_button")
+                    ) {
+                        Text("Save Prompt to Google Cloud", fontWeight = FontWeight.Bold)
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-            // Cloud Sessions Snapshot
-            when (val sState = sessionsState) {
-                is CloudUiState.Loading -> Unit
-                is CloudUiState.Error -> Text(
-                    "Cloud Sessions Error: ${sState.message}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CrimsonError
-                )
-                is CloudUiState.Success -> {
-                    Text(
-                        text = "Synced Cloud Agent Sessions (${sState.data.size})",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = NeuralViolet
+                when (val prState = promptsState) {
+                    is CloudUiState.Loading -> Text(
+                        "Loading synced prompts...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = secondaryFg
                     )
-                    sState.data.forEach { cs ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 6.dp)
-                                .background(elevated, RoundedCornerShape(8.dp))
-                                .padding(8.dp)
-                        ) {
+                    is CloudUiState.Error -> Text(
+                        "Cloud Prompts Error: ${prState.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CrimsonError
+                    )
+                    is CloudUiState.Success -> {
+                        if (prState.data.isEmpty()) {
                             Text(
-                                text = "${cs.workspaceName} (${cs.branchName}) • ${cs.status}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = fg
-                            )
-                            Text(
-                                text = cs.lastSummary,
-                                style = MaterialTheme.typography.labelSmall,
+                                text = "No synced prompts yet. Tap '+ New Prompt' above to save your first reusable Antigravity prompt.",
+                                style = MaterialTheme.typography.bodySmall,
                                 color = secondaryFg
                             )
+                        } else {
+                            prState.data.forEach { snippet ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                        .background(elevated, RoundedCornerShape(10.dp))
+                                        .border(1.dp, border, RoundedCornerShape(10.dp))
+                                        .padding(10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = snippet.title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = accent,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        IconButton(
+                                            onClick = { cloudViewModel.deleteCloudPrompt(snippet.id) },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DeleteOutline,
+                                                contentDescription = "Delete Prompt",
+                                                tint = CrimsonError,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = snippet.promptText,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = fg,
+                                        maxLines = 4,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        Button(
+                                            onClick = { onInsertPromptIntoRemote(snippet.promptText) },
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = accent,
+                                                contentColor = Color(0xFF070708)
+                                            )
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                                contentDescription = "Insert into Remote",
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Insert into Remote", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                }
-            }
-
-            // Saved Copilot Prompts
-            if (promptsState is CloudUiState.Success) {
-                val prompts = (promptsState as CloudUiState.Success).data
-                if (prompts.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Cloud Copilot Bookmarks (${prompts.size})",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = accent
-                    )
                 }
             }
         }

@@ -686,10 +686,18 @@ object RetainedWebViewManager {
     @SuppressLint("StaticFieldLeak")
     private var pinnedWebView: WebView? = null
     private var lastLoadedEndpoint: String = "__UNINITIALIZED__"
+    private var domLagBoosterActive: Boolean = true
 
     fun isSafeHttpUrl(url: String): Boolean {
         val clean = url.trim().lowercase()
         return clean.startsWith("https://") || clean.startsWith("http://")
+    }
+
+    fun buildCleanMobileUserAgent(rawUserAgent: String): String {
+        return rawUserAgent
+            .replace("; wv", "")
+            .replace("Version/4.0 ", "")
+            .trim()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -699,22 +707,35 @@ object RetainedWebViewManager {
         domLagBooster: Boolean,
         onJsBridgeMessage: (String) -> Unit
     ): WebView {
+        domLagBoosterActive = domLagBooster
         val appContext = context.applicationContext
         val webView = pinnedWebView ?: WebView(appContext).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            setBackgroundColor(android.graphics.Color.parseColor("#070708"))
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            setInitialScale(0)
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                databaseEnabled = true
                 allowFileAccess = false
                 allowContentAccess = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                 useWideViewPort = true
-                loadWithOverviewMode = true
+                loadWithOverviewMode = false
+                layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
+                textZoom = 100
+                setSupportZoom(false)
+                builtInZoomControls = false
+                displayZoomControls = false
+                mediaPlaybackRequiresUserGesture = false
+                userAgentString = buildCleanMobileUserAgent(userAgentString.orEmpty())
             }
             addJavascriptInterface(
                 object {
@@ -739,8 +760,13 @@ object RetainedWebViewManager {
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
-                    if (domLagBooster) {
+                    injectMobileLayoutFix(view)
+                    // Re-apply after SPA hydration to prevent late horizontal layout shift
+                    view?.postDelayed({ injectMobileLayoutFix(view) }, 450L)
+                    if (domLagBoosterActive) {
                         injectDomLagOptimizer(view)
+                    } else {
+                        removeDomLagOptimizer(view)
                     }
                 }
             }
@@ -768,6 +794,7 @@ object RetainedWebViewManager {
     }
 
     fun reloadOrForceLoadUrl(url: String, domLagBooster: Boolean) {
+        domLagBoosterActive = domLagBooster
         val webView = pinnedWebView ?: return
         val cleanUrl = url.trim()
         lastLoadedEndpoint = cleanUrl
@@ -784,15 +811,123 @@ object RetainedWebViewManager {
         }
     }
 
+    fun reloadCurrentPage() {
+        val webView = pinnedWebView ?: return
+        webView.post {
+            try {
+                if (isSafeHttpUrl(lastLoadedEndpoint)) {
+                    webView.reload()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun canGoBack(): Boolean = pinnedWebView?.canGoBack() == true
+
+    fun goBack(): Boolean {
+        val webView = pinnedWebView ?: return false
+        return if (webView.canGoBack()) {
+            webView.goBack()
+            true
+        } else {
+            false
+        }
+    }
+
+    /**
+     * Fixes right-hand alignment / horizontal overflow inside Antigravity Remote web UI
+     * by enforcing a 1:1 mobile viewport, clamping html/body max-width to 100vw, and
+     * resetting any horizontal scroll offset on root containers.
+     */
+    fun injectMobileLayoutFix(webView: WebView? = pinnedWebView) {
+        val target = webView ?: return
+        val js = """
+            (function() {
+              try {
+                var vp = document.querySelector('meta[name="viewport"]');
+                var vpContent = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
+                if (!vp && document.head) {
+                  vp = document.createElement('meta');
+                  vp.name = 'viewport';
+                  document.head.appendChild(vp);
+                }
+                if (vp) { vp.setAttribute('content', vpContent); }
+
+                var styleId = 'antigravity-pulse-layout-fix';
+                var existing = document.getElementById(styleId);
+                if (!existing && document.head) {
+                  existing = document.createElement('style');
+                  existing.id = styleId;
+                  existing.textContent =
+                    'html, body { width: 100% !important; max-width: 100vw !important; min-width: 0 !important; ' +
+                    'overflow-x: hidden !important; margin-left: 0 !important; margin-right: 0 !important; ' +
+                    'padding-left: 0 !important; padding-right: 0 !important; box-sizing: border-box !important; } ' +
+                    '#root, #app, main, [role="main"] { max-width: 100vw !important; box-sizing: border-box !important; }';
+                  document.head.appendChild(existing);
+                }
+
+                if (document.documentElement) { document.documentElement.scrollLeft = 0; }
+                if (document.body) { document.body.scrollLeft = 0; }
+                window.scrollTo(0, window.scrollY || 0);
+              } catch (e) {}
+            })();
+        """.trimIndent()
+        target.post {
+            try {
+                target.scrollTo(0, target.scrollY)
+                target.evaluateJavascript(js, null)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Inserts a prompt directly into the live Antigravity Remote web composer
+     * (supporting React/Angular/WebComponent <textarea>, [contenteditable], or <input>),
+     * in addition to calling window.receiveNativePrompt if provided.
+     */
     fun injectPromptIntoWebView(prompt: String) {
         val webView = pinnedWebView ?: return
         val escaped = JSONObject.quote(prompt)
+        val js = """
+            (function(text) {
+              try {
+                if (window.receiveNativePrompt) {
+                  window.receiveNativePrompt(text);
+                  return true;
+                }
+                var candidates = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]'));
+                var target = candidates.find(function(el) {
+                  var r = el.getBoundingClientRect();
+                  return r.width > 40 && r.height > 16 && !el.disabled && !el.readOnly;
+                }) || candidates[0];
+                if (!target) { return false; }
+                target.focus();
+                if (target.isContentEditable) {
+                  target.textContent = text;
+                } else {
+                  var proto = target.tagName === 'TEXTAREA'
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                  var setter = Object.getOwnPropertyDescriptor(proto, 'value');
+                  if (setter && setter.set) {
+                    setter.set.call(target, text);
+                  } else {
+                    target.value = text;
+                  }
+                }
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              } catch (e) {
+                return false;
+              }
+            })($escaped);
+        """.trimIndent()
         webView.post {
             try {
-                webView.evaluateJavascript(
-                    "if (window.receiveNativePrompt) { window.receiveNativePrompt($escaped); }",
-                    null
-                )
+                webView.evaluateJavascript(js, null)
             } catch (_: Exception) {
             }
         }
@@ -813,12 +948,34 @@ object RetainedWebViewManager {
     }
 
     fun injectDomLagOptimizer(webView: WebView? = pinnedWebView) {
+        domLagBoosterActive = true
         val target = webView ?: return
         val js = """
             (function() {
-              const style = document.createElement('style');
-              style.innerHTML = '*, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.05ms !important; scroll-behavior: auto !important; }';
-              if (document.head) { document.head.appendChild(style); }
+              var id = 'antigravity-pulse-dom-booster';
+              if (!document.getElementById(id) && document.head) {
+                var style = document.createElement('style');
+                style.id = id;
+                style.textContent = '*, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.05ms !important; scroll-behavior: auto !important; }';
+                document.head.appendChild(style);
+              }
+            })();
+        """.trimIndent()
+        target.post {
+            try {
+                target.evaluateJavascript(js, null)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun removeDomLagOptimizer(webView: WebView? = pinnedWebView) {
+        domLagBoosterActive = false
+        val target = webView ?: return
+        val js = """
+            (function() {
+              var el = document.getElementById('antigravity-pulse-dom-booster');
+              if (el && el.parentNode) { el.parentNode.removeChild(el); }
             })();
         """.trimIndent()
         target.post {
@@ -834,27 +991,34 @@ object RetainedWebViewManager {
             <!DOCTYPE html>
             <html>
             <head>
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
               <style>
-                body {
-                  margin: 0; padding: 32px 20px;
+                * { box-sizing: border-box; }
+                html, body {
+                  margin: 0; padding: 24px 18px; width: 100%; max-width: 100vw; overflow-x: hidden;
                   background: #070708; color: #FFFFFF;
                   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                   display: flex; flex-direction: column; align-items: center; justify-content: center;
-                  min-height: 75vh; text-align: center;
+                  min-height: 82vh; text-align: center;
                 }
                 .box {
-                  max-width: 420px; background: #111114; border: 1px solid #26262B;
-                  border-radius: 16px; padding: 24px;
+                  width: 100%; max-width: 400px; background: #111114; border: 1px solid #26262B;
+                  border-radius: 18px; padding: 24px;
                 }
-                h3 { margin: 0 0 8px 0; color: #FFC799; font-size: 17px; }
-                p { margin: 0; color: #A1A1AA; font-size: 13px; line-height: 1.5; }
+                h3 { margin: 0 0 10px 0; color: #FFC799; font-size: 18px; }
+                p { margin: 0; color: #A1A1AA; font-size: 14px; line-height: 1.55; }
+                .hint {
+                  margin-top: 14px; padding: 10px 12px; border-radius: 12px;
+                  background: rgba(255, 199, 153, 0.10); border: 1px solid rgba(255, 199, 153, 0.30);
+                  color: #FFC799; font-size: 12.5px;
+                }
               </style>
             </head>
             <body>
               <div class="box">
-                <h3>Pinned Web Bridge Ready</h3>
-                <p>Paste your live Google Antigravity Remote URL (<code>https://...</code> or <code>http://...</code>) in the bar above and tap Refresh to pin your remote session in Android RAM with zero reloads.</p>
+                <h3>Antigravity Remote Ready</h3>
+                <p>Tap the floating side control handle to <strong>Scan QR Code</strong> or <strong>Connect Remote URL</strong>. Your session stays pinned in Android RAM with zero reloads.</p>
+                <div class="hint">Tip: Drag the floating control handle anywhere on screen to reposition it.</div>
               </div>
             </body>
             </html>
