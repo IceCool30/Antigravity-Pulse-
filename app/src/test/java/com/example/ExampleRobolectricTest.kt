@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AntigravityDatabase
@@ -513,5 +514,179 @@ class ExampleRobolectricTest {
         assertNotNull(RetainedWebViewManager.onWebDownloadRequested)
         RetainedWebViewManager.onWebDownloadRequested = null
         assertNull(RetainedWebViewManager.onWebDownloadRequested)
+    }
+
+    @Test
+    fun `native Welcome page shows Remote and AI Studio launch buttons and triggers both actions`() {
+        RetainedWebViewManager.resetToWelcomeScreen()
+        var remoteLaunchCount = 0
+        var qrScanCount = 0
+        var aiStudioLaunchCount = 0
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.screens.RetainedWebViewBridgeScreen(
+                    telemetry = com.example.data.remote.BridgeTelemetry(activeEndpoint = ""),
+                    savedFallbackEndpoint = "",
+                    isFullscreenBarsHidden = true,
+                    onToggleDomBooster = {},
+                    onSaveAndConnectUrl = {},
+                    onOpenHostSwitcher = { remoteLaunchCount++ },
+                    onOpenQrScanner = { qrScanCount++ },
+                    onOpenAiStudio = { aiStudioLaunchCount++ },
+                    onJsBridgeEvent = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("native_welcome_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("welcome_guide_tab_remote").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("welcome_guide_tab_ai_studio").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("welcome_bottom_launch_remote_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("welcome_bottom_launch_ai_studio_button").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("welcome_guide_tab_ai_studio").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("welcome_guide_tab_remote").performClick()
+        composeTestRule.onNodeWithTag("welcome_bottom_launch_remote_button").performClick()
+        composeTestRule.onNodeWithTag("welcome_bottom_launch_ai_studio_button").performClick()
+        composeTestRule.onNodeWithTag("welcome_scan_qr_button")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals(1, remoteLaunchCount)
+        assertEquals(1, aiStudioLaunchCount)
+        assertEquals(1, qrScanCount)
+    }
+
+    @Test
+    fun `offline continuity helper and overlay hold cached view on network drop and recover on reconnect`() {
+        // 1. Verify network error classification
+        assertTrue(
+            com.example.data.remote.WebViewOfflineCacheHelper.isNetworkErrorCode(
+                android.webkit.WebViewClient.ERROR_HOST_LOOKUP,
+                isDeviceOnline = true
+            )
+        )
+        assertTrue(
+            com.example.data.remote.WebViewOfflineCacheHelper.isNetworkErrorCode(
+                android.webkit.WebViewClient.ERROR_CONNECT,
+                isDeviceOnline = true
+            )
+        )
+        assertTrue(
+            com.example.data.remote.WebViewOfflineCacheHelper.isNetworkErrorCode(
+                android.webkit.WebViewClient.ERROR_TIMEOUT,
+                isDeviceOnline = false
+            )
+        )
+        assertFalse(
+            com.example.data.remote.WebViewOfflineCacheHelper.isNetworkErrorCode(
+                android.webkit.WebViewClient.ERROR_FAILED_SSL_HANDSHAKE,
+                isDeviceOnline = true
+            )
+        )
+        assertTrue(
+            com.example.data.remote.WebViewOfflineCacheHelper.isNetworkErrorCode(
+                android.webkit.WebViewClient.ERROR_FAILED_SSL_HANDSHAKE,
+                isDeviceOnline = false
+            )
+        )
+
+        // 2. Verify RetainedWebViewManager offline/reconnect continuity transitions
+        val remoteUrl = "https://workstation.tailnet.ts.net:8443/remote"
+        RetainedWebViewManager.obtainPinnedWebView(
+            context = context,
+            endpointUrl = remoteUrl,
+            domLagBooster = true,
+            onJsBridgeMessage = {}
+        )
+        assertTrue(RetainedWebViewManager.hasActiveSessionState.value)
+
+        RetainedWebViewManager.onNetworkLost()
+        val offlineState = RetainedWebViewManager.continuityState.value
+        assertFalse(offlineState.isOnline)
+        assertEquals(com.example.data.remote.OfflineRecoveryStatus.OFFLINE_CACHED, offlineState.status)
+
+        RetainedWebViewManager.onNetworkRestored(autoReloadAfterLongOutage = false)
+        val restoredState = RetainedWebViewManager.continuityState.value
+        assertTrue(restoredState.isOnline)
+        assertEquals(com.example.data.remote.OfflineRecoveryStatus.RESTORED, restoredState.status)
+
+        RetainedWebViewManager.dismissRestoredBanner()
+        assertEquals(
+            com.example.data.remote.OfflineRecoveryStatus.ONLINE,
+            RetainedWebViewManager.continuityState.value.status
+        )
+
+        RetainedWebViewManager.resetToWelcomeScreen()
+        assertFalse(RetainedWebViewManager.hasActiveSessionState.value)
+
+        // 3. Verify OfflineContinuityOverlay displays status pill, cold-start fallback, and retry action
+        var retryClicks = 0
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.components.OfflineContinuityOverlay(
+                    continuity = com.example.data.remote.WebViewContinuityState(
+                        isOnline = false,
+                        status = com.example.data.remote.OfflineRecoveryStatus.OFFLINE_CACHED,
+                        hadMainFrameError = true,
+                        showingSnapshotShield = true,
+                        cachedSnapshot = null,
+                        statusMessage = "Offline • Holding cached screen until internet returns"
+                    ),
+                    workspaceLabel = "Google AI Studio",
+                    onRetryOrReloadLatest = { retryClicks++ },
+                    onDismissRestoredBanner = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("offline_cold_start_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("offline_continuity_status_pill").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("offline_retry_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("offline_pill_action_button").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("offline_pill_action_button").performClick()
+        composeTestRule.onNodeWithTag("offline_retry_button").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(2, retryClicks)
+    }
+
+    @Test
+    fun `security audit redacts URL query tokens enforces secure media origins and sanitizes download filenames`() {
+        // 1. URL credential & query-token redaction (Cloud Sync & lock-screen notification safety)
+        assertEquals(
+            "https://my-host.example.com:8443/remote",
+            RetainedWebViewManager.stripSensitiveUrlCredentials(
+                "https://user:pass@my-host.example.com:8443/remote?token=secret123#session"
+            )
+        )
+        assertEquals(
+            "http://192.168.1.50:8443/app",
+            RetainedWebViewManager.stripSensitiveUrlCredentials(
+                "http://192.168.1.50:8443/app?auth=xyz"
+            )
+        )
+        assertEquals("", RetainedWebViewManager.stripSensitiveUrlCredentials("javascript:alert(1)"))
+
+        // 2. Secure media origin enforcement for WebView microphone & camera requests
+        assertTrue(RetainedWebViewManager.isSecureMediaOrigin("https://aistudio.google.com"))
+        assertTrue(RetainedWebViewManager.isSecureMediaOrigin("https://workstation.tailnet.ts.net:8443"))
+        assertTrue(RetainedWebViewManager.isSecureMediaOrigin("http://localhost:8443"))
+        assertTrue(RetainedWebViewManager.isSecureMediaOrigin("http://127.0.0.1:3000"))
+        assertFalse(RetainedWebViewManager.isSecureMediaOrigin("http://public-site.example.com"))
+        assertFalse(RetainedWebViewManager.isSecureMediaOrigin("file:///etc/passwd"))
+
+        // 3. Download filename path traversal & illegal character sanitization
+        assertEquals("passwd", sanitizeDownloadFileName("../../etc/passwd"))
+        assertEquals("payload.txt", sanitizeDownloadFileName("..\\..\\Windows\\payload.txt"))
+        assertEquals("hidden_env", sanitizeDownloadFileName("...hidden_env"))
+        assertEquals("antigravity-download", sanitizeDownloadFileName("   ...  "))
+        assertEquals("report_2026_.pdf", sanitizeDownloadFileName("report:2026?.pdf"))
     }
 }

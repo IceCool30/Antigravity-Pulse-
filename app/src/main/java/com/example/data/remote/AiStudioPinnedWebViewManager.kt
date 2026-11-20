@@ -14,6 +14,7 @@ import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -53,6 +54,129 @@ object AiStudioPinnedWebViewManager {
 
     private val _pageLoadProgress = MutableStateFlow(100)
     val pageLoadProgress: StateFlow<Int> = _pageLoadProgress.asStateFlow()
+
+    private val _continuityState = MutableStateFlow(WebViewContinuityState())
+    val continuityState: StateFlow<WebViewContinuityState> = _continuityState.asStateFlow()
+
+    private var lastGoodUrl: String = AiStudioWebSection.NEW_CHAT.url
+    private var mainFrameFailedInCurrentLoad: Boolean = false
+
+    private fun captureLatestSnapshotIfHealthy(view: WebView? = pinnedAiStudioWebView) {
+        val target = view ?: return
+        if (mainFrameFailedInCurrentLoad) return
+        WebViewOfflineCacheHelper.runOnMainThread {
+            val captured = WebViewOfflineCacheHelper.captureWebViewSnapshot(target)
+            if (captured != null) {
+                _continuityState.value = _continuityState.value.copy(cachedSnapshot = captured)
+            }
+        }
+    }
+
+    fun onNetworkLost() {
+        val webView = pinnedAiStudioWebView
+        WebViewOfflineCacheHelper.applyCacheMode(webView, isOnline = false)
+        if (webView == null) {
+            _continuityState.value = _continuityState.value.copy(isOnline = false)
+            return
+        }
+        WebViewOfflineCacheHelper.runOnMainThread {
+            val fresh = WebViewOfflineCacheHelper.captureWebViewSnapshot(webView)
+            val prev = _continuityState.value
+            _continuityState.value = prev.copy(
+                isOnline = false,
+                status = OfflineRecoveryStatus.OFFLINE_CACHED,
+                cachedSnapshot = fresh ?: prev.cachedSnapshot,
+                statusMessage = "Offline • Holding AI Studio view until internet returns"
+            )
+        }
+    }
+
+    fun onNetworkRestored(autoReloadAfterLongOutage: Boolean) {
+        val webView = pinnedAiStudioWebView
+        WebViewOfflineCacheHelper.applyCacheMode(webView, isOnline = true)
+        if (webView == null) {
+            _continuityState.value = _continuityState.value.copy(
+                isOnline = true,
+                status = OfflineRecoveryStatus.ONLINE,
+                showingSnapshotShield = false,
+                statusMessage = ""
+            )
+            return
+        }
+
+        val prev = _continuityState.value
+        val needsReload = prev.hadMainFrameError || autoReloadAfterLongOutage
+        if (needsReload) {
+            val targetUrl = lastGoodUrl.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
+                ?: AiStudioWebSection.NEW_CHAT.url
+            WebViewOfflineCacheHelper.runOnMainThread {
+                val snap = if (!prev.hadMainFrameError) {
+                    WebViewOfflineCacheHelper.captureWebViewSnapshot(webView) ?: prev.cachedSnapshot
+                } else {
+                    prev.cachedSnapshot
+                }
+                _continuityState.value = prev.copy(
+                    isOnline = true,
+                    status = OfflineRecoveryStatus.RECONNECTING,
+                    showingSnapshotShield = snap != null || prev.hadMainFrameError,
+                    cachedSnapshot = snap,
+                    statusMessage = "Back online • Syncing AI Studio..."
+                )
+                WebViewOfflineCacheHelper.runOnMainThread(delayMs = 650L) {
+                    try {
+                        mainFrameFailedInCurrentLoad = false
+                        webView.loadUrl(targetUrl)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        } else {
+            WebViewOfflineCacheHelper.dispatchBrowserOnlineEvent(webView)
+            _continuityState.value = prev.copy(
+                isOnline = true,
+                status = OfflineRecoveryStatus.RESTORED,
+                showingSnapshotShield = false,
+                statusMessage = "Back online • AI Studio live"
+            )
+        }
+    }
+
+    fun refreshWithSnapshotShield(): Boolean {
+        val webView = pinnedAiStudioWebView ?: return false
+        val targetUrl = lastGoodUrl.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
+            ?: currentUrl()
+        WebViewOfflineCacheHelper.applyCacheMode(webView, isOnline = true)
+        WebViewOfflineCacheHelper.runOnMainThread {
+            val prev = _continuityState.value
+            val snap = if (!prev.hadMainFrameError) {
+                WebViewOfflineCacheHelper.captureWebViewSnapshot(webView) ?: prev.cachedSnapshot
+            } else {
+                prev.cachedSnapshot
+            }
+            _continuityState.value = prev.copy(
+                status = OfflineRecoveryStatus.RECONNECTING,
+                showingSnapshotShield = snap != null,
+                cachedSnapshot = snap,
+                statusMessage = "Refreshing AI Studio..."
+            )
+            try {
+                mainFrameFailedInCurrentLoad = false
+                webView.loadUrl(targetUrl)
+            } catch (_: Exception) {
+            }
+        }
+        return true
+    }
+
+    fun dismissRestoredBanner() {
+        val prev = _continuityState.value
+        if (prev.status == OfflineRecoveryStatus.RESTORED) {
+            _continuityState.value = prev.copy(
+                status = OfflineRecoveryStatus.ONLINE,
+                statusMessage = ""
+            )
+        }
+    }
 
     private fun updateSectionFromUrl(url: String) {
         val lower = url.lowercase()
@@ -104,26 +228,17 @@ object AiStudioPinnedWebViewManager {
     }
 
     fun reloadCurrentPage(): Boolean {
-        val webView = pinnedAiStudioWebView ?: return false
-        webView.post {
-            try {
-                if (RetainedWebViewManager.isSafeHttpUrl(currentLoadedUrl)) {
-                    webView.reload()
-                } else {
-                    navigateToSection(AiStudioWebSection.NEW_CHAT)
-                }
-            } catch (_: Exception) {
-            }
-        }
-        return true
+        return refreshWithSnapshotShield()
     }
 
     fun navigateToSection(section: AiStudioWebSection) {
         _activeSectionState.value = section
         currentLoadedUrl = section.url
+        lastGoodUrl = section.url
         val webView = pinnedAiStudioWebView ?: return
         webView.post {
             try {
+                mainFrameFailedInCurrentLoad = false
                 webView.loadUrl(section.url)
             } catch (_: Exception) {
             }
@@ -244,6 +359,9 @@ object AiStudioPinnedWebViewManager {
         } catch (_: Exception) {
         }
         currentLoadedUrl = ""
+        lastGoodUrl = AiStudioWebSection.NEW_CHAT.url
+        mainFrameFailedInCurrentLoad = false
+        _continuityState.value = WebViewContinuityState()
         _canGoBackState.value = false
     }
 
@@ -336,7 +454,7 @@ object AiStudioPinnedWebViewManager {
                     if (request == null) return
                     val originUrl = request.origin?.toString().orEmpty()
                     val handler = RetainedWebViewManager.onWebPermissionRequestHandler
-                    if (handler != null && RetainedWebViewManager.isSafeHttpUrl(originUrl)) {
+                    if (handler != null && RetainedWebViewManager.isSecureMediaOrigin(originUrl)) {
                         handler(request)
                     } else {
                         request.deny()
@@ -390,7 +508,9 @@ object AiStudioPinnedWebViewManager {
                     super.onPageStarted(view, url, favicon)
                     refreshCanGoBack(view)
                     if (!url.isNullOrBlank() && RetainedWebViewManager.isSafeHttpUrl(url)) {
+                        mainFrameFailedInCurrentLoad = false
                         currentLoadedUrl = url
+                        lastGoodUrl = url
                         if (url.contains("aistudio.google.com", ignoreCase = true)) {
                             updateSectionFromUrl(url)
                         }
@@ -403,7 +523,35 @@ object AiStudioPinnedWebViewManager {
                     refreshCanGoBack(view)
                     if (!url.isNullOrBlank() && url.contains("aistudio.google.com", ignoreCase = true)) {
                         currentLoadedUrl = url
+                        lastGoodUrl = url
                         updateSectionFromUrl(url)
+                    }
+                }
+
+                override fun onReceivedError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    error: WebResourceError?
+                ) {
+                    super.onReceivedError(view, request, error)
+                    if (request?.isForMainFrame == true && error != null) {
+                        val isOnlineNow = _continuityState.value.isOnline
+                        if (WebViewOfflineCacheHelper.isNetworkErrorCode(error.errorCode, isOnlineNow)) {
+                            mainFrameFailedInCurrentLoad = true
+                            val prev = _continuityState.value
+                            _continuityState.value = prev.copy(
+                                isOnline = false,
+                                status = OfflineRecoveryStatus.OFFLINE_CACHED,
+                                hadMainFrameError = true,
+                                showingSnapshotShield = true,
+                                statusMessage = if (prev.cachedSnapshot != null) {
+                                    "Offline • Holding AI Studio view until internet returns"
+                                } else {
+                                    "Offline • Waiting for internet connection..."
+                                }
+                            )
+                            WebViewOfflineCacheHelper.applyCacheMode(view, isOnline = false)
+                        }
                     }
                 }
 
@@ -421,15 +569,31 @@ object AiStudioPinnedWebViewManager {
                     _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
                     flushCookies()
-                    if (!url.isNullOrBlank() && RetainedWebViewManager.isSafeHttpUrl(url)) {
-                        currentLoadedUrl = url
-                        if (url.contains("aistudio.google.com", ignoreCase = true)) {
-                            updateSectionFromUrl(url)
+                    val isErrorPage = url.isNullOrBlank() ||
+                        url.startsWith("chrome-error:", ignoreCase = true) ||
+                        url.startsWith("about:", ignoreCase = true)
+                    if (!mainFrameFailedInCurrentLoad && !isErrorPage && RetainedWebViewManager.isSafeHttpUrl(url.orEmpty())) {
+                        currentLoadedUrl = url.orEmpty()
+                        lastGoodUrl = url.orEmpty()
+                        if (currentLoadedUrl.contains("aistudio.google.com", ignoreCase = true)) {
+                            updateSectionFromUrl(currentLoadedUrl)
                         }
+                        val prev = _continuityState.value
+                        val wasRecovering = prev.status == OfflineRecoveryStatus.RECONNECTING || prev.hadMainFrameError
+                        _continuityState.value = prev.copy(
+                            isOnline = true,
+                            hadMainFrameError = false,
+                            showingSnapshotShield = false,
+                            status = if (wasRecovering) OfflineRecoveryStatus.RESTORED else OfflineRecoveryStatus.ONLINE,
+                            statusMessage = if (wasRecovering) "Back online • AI Studio updated" else ""
+                        )
                         injectAiStudioNotificationShim(view)
+                        view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
                     }
-                    RetainedWebViewManager.injectMobileLayoutFix(view)
-                    applyLagBooster(domLagBoosterActive)
+                    if (!isErrorPage) {
+                        RetainedWebViewManager.injectMobileLayoutFix(view)
+                        applyLagBooster(domLagBoosterActive)
+                    }
                 }
             }
             pinnedAiStudioWebView = this

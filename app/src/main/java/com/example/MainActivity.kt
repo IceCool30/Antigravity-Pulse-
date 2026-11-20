@@ -22,7 +22,7 @@ import android.webkit.PermissionRequest
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -133,6 +133,7 @@ import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
 import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.notifications.PulseNotificationManager
 import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
@@ -460,6 +461,28 @@ internal fun resolveAllowedWebResourcesAndPermissions(
     return allowedResources.distinct() to androidPermissions.distinct()
 }
 
+/**
+ * Sanitizes WebView download filenames to prevent directory traversal (`../`, `/`, `\`),
+ * hidden dotfiles, control characters, and OS-illegal filename characters.
+ */
+internal fun sanitizeDownloadFileName(rawName: String?): String {
+    val base = rawName.orEmpty()
+        .substringAfterLast('/')
+        .substringAfterLast('\\')
+        .trim()
+        .trimStart('.', ' ')
+        .replace(Regex("[\\u0000-\\u001F\\u007F:*?\"<>|]"), "_")
+        .replace("..", "_")
+        .trimStart('.', ' ')
+        .trim()
+        .take(120)
+    return if (base.isBlank() || base.all { it == '_' || it == '.' }) {
+        "antigravity-download"
+    } else {
+        base
+    }
+}
+
 @Composable
 fun AntigravityPulseApp(
     appearance: AppearanceSettings,
@@ -661,21 +684,26 @@ fun AntigravityPulseApp(
 
         RetainedWebViewManager.onWebDownloadRequested = { url, userAgent, contentDisposition, mimeType ->
             if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                val safeFileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-                    .ifBlank { "antigravity-download" }
+                val safeFileName = sanitizeDownloadFileName(
+                    URLUtil.guessFileName(url, contentDisposition, mimeType)
+                )
+                val isHttpsDownload = url.trim().startsWith("https://", ignoreCase = true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     try {
                         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
                         val dmReq = DownloadManager.Request(Uri.parse(url)).apply {
                             val resolvedMime = mimeType.takeIf { it.isNotBlank() }
                             if (resolvedMime != null) setMimeType(resolvedMime)
-                            val cookies = try {
-                                CookieManager.getInstance().getCookie(url)
-                            } catch (_: Exception) {
-                                null
-                            }
-                            if (!cookies.isNullOrBlank()) {
-                                addRequestHeader("Cookie", cookies)
+                            // Only attach session cookies over encrypted HTTPS downloads
+                            if (isHttpsDownload) {
+                                val cookies = try {
+                                    CookieManager.getInstance().getCookie(url)
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                if (!cookies.isNullOrBlank()) {
+                                    addRequestHeader("Cookie", cookies)
+                                }
                             }
                             if (userAgent.isNotBlank()) {
                                 addRequestHeader("User-Agent", userAgent)
@@ -788,57 +816,71 @@ fun AntigravityPulseApp(
         }
     }
 
-    // Keep auto-reconnect policy synced with persisted settings and recover pinned WebViews on Wi-Fi/5G restore
+    // Keep auto-reconnect policy synced and maintain offline cached views across network drops
     LaunchedEffect(appearance.isAutoReconnectEnabled) {
         antigravityViewModel.setAutoReconnectEnabled(appearance.isAutoReconnectEnabled)
     }
 
     DisposableEffect(appearance.isAutoReconnectEnabled) {
-        if (!appearance.isAutoReconnectEnabled) {
-            onDispose {}
-        } else {
-            val connectivityManager = context.applicationContext
-                .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            val hadNetworkDrop = AtomicBoolean(false)
-            val callback = object : ConnectivityManager.NetworkCallback() {
-                override fun onLost(network: Network) {
-                    hadNetworkDrop.set(true)
-                }
+        val connectivityManager = context.applicationContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val offlineStartedAtMs = AtomicLong(0L)
+        val autoReloadOnLongOutage = appearance.isAutoReconnectEnabled
 
-                override fun onCapabilitiesChanged(
-                    network: Network,
-                    networkCapabilities: NetworkCapabilities
-                ) {
-                    val hasValidatedInternet =
-                        networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                            networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                    if (hasValidatedInternet && hadNetworkDrop.compareAndSet(true, false)) {
-                        var refreshed = false
-                        if (RetainedWebViewManager.hasActiveLoadedSession()) {
-                            RetainedWebViewManager.reloadCurrentPage()
-                            refreshed = true
-                        }
-                        if (AiStudioPinnedWebViewManager.isPinnedInRam()) {
-                            AiStudioPinnedWebViewManager.reloadCurrentPage()
-                            refreshed = true
-                        }
-                        if (refreshed) {
-                            antigravityViewModel.recordWebViewBridgeEvent(
-                                "Network recovered — refreshed active session"
-                            )
-                        }
+        // Initialize cache mode accurately if launched while already offline
+        if (!WebViewOfflineCacheHelper.isNetworkCurrentlyAvailable(context)) {
+            offlineStartedAtMs.set(SystemClock.elapsedRealtime())
+            RetainedWebViewManager.onNetworkLost()
+            AiStudioPinnedWebViewManager.onNetworkLost()
+        }
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLost(network: Network) {
+                // Only enter offline cached mode if no other active internet network remains
+                if (!WebViewOfflineCacheHelper.isNetworkCurrentlyAvailable(context)) {
+                    offlineStartedAtMs.compareAndSet(0L, SystemClock.elapsedRealtime())
+                    RetainedWebViewManager.onNetworkLost()
+                    AiStudioPinnedWebViewManager.onNetworkLost()
+                }
+            }
+
+            override fun onCapabilitiesChanged(
+                network: Network,
+                networkCapabilities: NetworkCapabilities
+            ) {
+                val hasValidatedInternet =
+                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                if (hasValidatedInternet) {
+                    val droppedAt = offlineStartedAtMs.getAndSet(0L)
+                    if (droppedAt > 0L) {
+                        val outageMs = SystemClock.elapsedRealtime() - droppedAt
+                        val shouldAutoReload = autoReloadOnLongOutage && outageMs >= 15_000L
+                        RetainedWebViewManager.onNetworkRestored(
+                            autoReloadAfterLongOutage = shouldAutoReload
+                        )
+                        AiStudioPinnedWebViewManager.onNetworkRestored(
+                            autoReloadAfterLongOutage = shouldAutoReload
+                        )
+                        antigravityViewModel.recordWebViewBridgeEvent(
+                            if (shouldAutoReload) {
+                                "Back online — updating cached session to latest view"
+                            } else {
+                                "Back online — session resumed seamlessly"
+                            }
+                        )
                     }
                 }
             }
+        }
+        try {
+            connectivityManager?.registerDefaultNetworkCallback(callback)
+        } catch (_: Exception) {
+        }
+        onDispose {
             try {
-                connectivityManager?.registerDefaultNetworkCallback(callback)
+                connectivityManager?.unregisterNetworkCallback(callback)
             } catch (_: Exception) {
-            }
-            onDispose {
-                try {
-                    connectivityManager?.unregisterNetworkCallback(callback)
-                } catch (_: Exception) {
-                }
             }
         }
     }
@@ -897,10 +939,13 @@ fun AntigravityPulseApp(
         RetainedWebViewManager.reloadOrForceLoadUrl(cleanUrl, telemetry.domLagBoosterEnabled)
         selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
         if (appearance.isAppEventNotificationsEnabled) {
+            val safeNotificationUrl = RetainedWebViewManager
+                .stripSensitiveUrlCredentials(cleanUrl)
+                .ifBlank { cleanName }
             PulseNotificationManager.showConnectionNotification(
                 context = context,
                 title = "Connected to $cleanName",
-                body = cleanUrl
+                body = safeNotificationUrl
             )
         }
     }
@@ -1161,7 +1206,9 @@ fun AntigravityPulseApp(
                                             token = activeProfile?.authToken.orEmpty()
                                         )
                                     },
+                                    onOpenHostSwitcher = { showServerModal = true },
                                     onOpenQrScanner = { showGlobalQrScanner = true },
+                                    onOpenAiStudio = { selectedTabIndex = PulseTab.AI_STUDIO.ordinal },
                                     onJsBridgeEvent = { eventMsg ->
                                         antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
                                         if (appearance.isAppEventNotificationsEnabled &&

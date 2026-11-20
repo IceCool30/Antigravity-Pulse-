@@ -391,7 +391,9 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
         return try {
             val uid = requireUserId()
             val safeId = sanitizeDocId(profileId)
-            val cleanUrl = endpointUrl.trim().take(300)
+            val cleanUrl = com.example.data.remote.RetainedWebViewManager
+                .stripSensitiveUrlCredentials(endpointUrl)
+                .take(300)
             require(
                 cleanUrl.startsWith("https://", ignoreCase = true) ||
                     cleanUrl.startsWith("http://", ignoreCase = true)

@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.AiStudioWebSection
 import com.example.data.remote.RetainedWebViewManager
+import com.example.ui.components.OfflineContinuityOverlay
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppearanceSettings
@@ -72,6 +74,7 @@ fun AiStudioWebScreen(
     val context = LocalContext.current
     val activeSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
     val loadProgress by AiStudioPinnedWebViewManager.pageLoadProgress.collectAsStateWithLifecycle()
+    val continuity by AiStudioPinnedWebViewManager.continuityState.collectAsStateWithLifecycle()
 
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
@@ -248,24 +251,41 @@ fun AiStudioWebScreen(
             )
         }
 
-        // Full-bleed RAM-Pinned Google AI Studio WebView
-        AndroidView(
-            factory = { ctx ->
-                AiStudioPinnedWebViewManager.obtainPinnedWebView(
-                    context = ctx,
-                    initialSection = activeSection,
-                    domLagBooster = domLagBoosterEnabled,
-                    onPageEvent = onStatusEvent
-                )
-            },
-            update = { _ ->
-                // No-op on recomposition so AI Studio stays pinned in RAM without flicker or reload
-            },
+        // Full-bleed RAM-Pinned Google AI Studio WebView with Offline Snapshot Continuity
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(Color.Black)
-                .testTag("ai_studio_pinned_webview_container")
-        )
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    AiStudioPinnedWebViewManager.obtainPinnedWebView(
+                        context = ctx,
+                        initialSection = activeSection,
+                        domLagBooster = domLagBoosterEnabled,
+                        onPageEvent = onStatusEvent
+                    )
+                },
+                update = { _ ->
+                    // No-op on recomposition so AI Studio stays pinned in RAM without flicker or reload
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .testTag("ai_studio_pinned_webview_container")
+            )
+
+            OfflineContinuityOverlay(
+                continuity = continuity,
+                workspaceLabel = "Google AI Studio",
+                onRetryOrReloadLatest = {
+                    AiStudioPinnedWebViewManager.refreshWithSnapshotShield()
+                    onStatusEvent("Refreshing AI Studio to latest state...")
+                },
+                onDismissRestoredBanner = {
+                    AiStudioPinnedWebViewManager.dismissRestoredBanner()
+                }
+            )
+        }
     }
 }

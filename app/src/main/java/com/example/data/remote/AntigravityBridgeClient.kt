@@ -14,6 +14,7 @@ import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -59,6 +60,143 @@ object RetainedWebViewManager {
 
     private val _pageLoadProgress = MutableStateFlow(100)
     val pageLoadProgress: StateFlow<Int> = _pageLoadProgress.asStateFlow()
+
+    private val _hasActiveSessionState = MutableStateFlow(false)
+    val hasActiveSessionState: StateFlow<Boolean> = _hasActiveSessionState.asStateFlow()
+
+    private val _continuityState = MutableStateFlow(WebViewContinuityState())
+    val continuityState: StateFlow<WebViewContinuityState> = _continuityState.asStateFlow()
+
+    private var lastGoodUrl: String = ""
+    private var mainFrameFailedInCurrentLoad: Boolean = false
+
+    private fun updateActiveEndpoint(endpoint: String) {
+        lastLoadedEndpoint = endpoint
+        val isSafe = isSafeHttpUrl(endpoint)
+        _hasActiveSessionState.value = isSafe
+        if (isSafe) {
+            lastGoodUrl = endpoint
+        }
+    }
+
+    private fun captureLatestSnapshotIfHealthy(view: WebView? = pinnedWebView) {
+        val target = view ?: return
+        if (!hasActiveLoadedSession() || mainFrameFailedInCurrentLoad) return
+        WebViewOfflineCacheHelper.runOnMainThread {
+            val captured = WebViewOfflineCacheHelper.captureWebViewSnapshot(target)
+            if (captured != null) {
+                _continuityState.value = _continuityState.value.copy(cachedSnapshot = captured)
+            }
+        }
+    }
+
+    fun onNetworkLost() {
+        val webView = pinnedWebView
+        WebViewOfflineCacheHelper.applyCacheMode(webView, isOnline = false)
+        if (!hasActiveLoadedSession()) {
+            _continuityState.value = _continuityState.value.copy(isOnline = false)
+            return
+        }
+        // Capture the exact screen the user is looking at right as the outage begins
+        WebViewOfflineCacheHelper.runOnMainThread {
+            val fresh = WebViewOfflineCacheHelper.captureWebViewSnapshot(webView)
+            val prev = _continuityState.value
+            _continuityState.value = prev.copy(
+                isOnline = false,
+                status = OfflineRecoveryStatus.OFFLINE_CACHED,
+                cachedSnapshot = fresh ?: prev.cachedSnapshot,
+                statusMessage = "Offline • Holding cached view until internet returns"
+            )
+        }
+    }
+
+    fun onNetworkRestored(autoReloadAfterLongOutage: Boolean) {
+        val webView = pinnedWebView
+        WebViewOfflineCacheHelper.applyCacheMode(webView, isOnline = true)
+        if (!hasActiveLoadedSession()) {
+            _continuityState.value = _continuityState.value.copy(
+                isOnline = true,
+                status = OfflineRecoveryStatus.ONLINE,
+                showingSnapshotShield = false,
+                statusMessage = ""
+            )
+            return
+        }
+
+        val prev = _continuityState.value
+        val needsReload = prev.hadMainFrameError || autoReloadAfterLongOutage
+        if (needsReload) {
+            val targetUrl = lastGoodUrl.takeIf { isSafeHttpUrl(it) } ?: currentLoadedEndpoint()
+            if (isSafeHttpUrl(targetUrl)) {
+                WebViewOfflineCacheHelper.runOnMainThread {
+                    val snap = if (!prev.hadMainFrameError) {
+                        WebViewOfflineCacheHelper.captureWebViewSnapshot(webView) ?: prev.cachedSnapshot
+                    } else {
+                        prev.cachedSnapshot
+                    }
+                    _continuityState.value = prev.copy(
+                        isOnline = true,
+                        status = OfflineRecoveryStatus.RECONNECTING,
+                        showingSnapshotShield = snap != null || prev.hadMainFrameError,
+                        cachedSnapshot = snap,
+                        statusMessage = "Back online • Updating to latest view..."
+                    )
+                    WebViewOfflineCacheHelper.runOnMainThread(delayMs = 650L) {
+                        try {
+                            mainFrameFailedInCurrentLoad = false
+                            webView?.loadUrl(targetUrl)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            }
+        } else {
+            // Short blip while live DOM stayed intact: notify SPA in-place without losing scroll/drafts
+            WebViewOfflineCacheHelper.dispatchBrowserOnlineEvent(webView)
+            _continuityState.value = prev.copy(
+                isOnline = true,
+                status = OfflineRecoveryStatus.RESTORED,
+                showingSnapshotShield = false,
+                statusMessage = "Back online • Session live"
+            )
+        }
+    }
+
+    fun refreshWithSnapshotShield() {
+        val webView = pinnedWebView ?: return
+        val targetUrl = lastGoodUrl.takeIf { isSafeHttpUrl(it) } ?: currentLoadedEndpoint()
+        if (!isSafeHttpUrl(targetUrl)) return
+        WebViewOfflineCacheHelper.applyCacheMode(webView, isOnline = true)
+        WebViewOfflineCacheHelper.runOnMainThread {
+            val prev = _continuityState.value
+            val snap = if (!prev.hadMainFrameError) {
+                WebViewOfflineCacheHelper.captureWebViewSnapshot(webView) ?: prev.cachedSnapshot
+            } else {
+                prev.cachedSnapshot
+            }
+            _continuityState.value = prev.copy(
+                status = OfflineRecoveryStatus.RECONNECTING,
+                showingSnapshotShield = snap != null,
+                cachedSnapshot = snap,
+                statusMessage = "Refreshing latest session..."
+            )
+            try {
+                mainFrameFailedInCurrentLoad = false
+                webView.loadUrl(targetUrl)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun dismissRestoredBanner() {
+        val prev = _continuityState.value
+        if (prev.status == OfflineRecoveryStatus.RESTORED) {
+            _continuityState.value = prev.copy(
+                status = OfflineRecoveryStatus.ONLINE,
+                statusMessage = ""
+            )
+        }
+    }
 
     private fun refreshCanGoBack(view: WebView? = pinnedWebView) {
         _canGoBackState.value = try {
@@ -106,6 +244,42 @@ object RetainedWebViewManager {
             val uri = Uri.parse(clean)
             val scheme = uri.scheme?.lowercase()
             (scheme == "https" || scheme == "http") && !uri.host.isNullOrBlank()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Strips embedded userinfo (`user:pass@`), query strings (`?token=...`), and fragments (`#...`)
+     * so secret pairing tokens embedded in URLs are never synced to cloud backups or leaked onto
+     * Android lock-screen notifications.
+     */
+    fun stripSensitiveUrlCredentials(url: String): String {
+        val clean = url.trim()
+        if (!isSafeHttpUrl(clean)) return ""
+        return try {
+            val uri = Uri.parse(clean)
+            val scheme = uri.scheme?.lowercase() ?: return ""
+            val host = uri.host?.takeIf { it.isNotBlank() } ?: return ""
+            val portPart = if (uri.port != -1) ":${uri.port}" else ""
+            val pathPart = uri.encodedPath.orEmpty()
+            "$scheme://$host$portPart$pathPart"
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * Restricts WebView microphone/camera `getUserMedia` grants to HTTPS origins or local loopback
+     * development servers (`localhost` / `127.0.0.1`), blocking cleartext public HTTP eavesdropping.
+     */
+    fun isSecureMediaOrigin(originUrl: String): Boolean {
+        if (!isSafeHttpUrl(originUrl)) return false
+        return try {
+            val uri = Uri.parse(originUrl.trim())
+            val scheme = uri.scheme?.lowercase()
+            val host = uri.host?.lowercase().orEmpty()
+            scheme == "https" || (scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1"))
         } catch (_: Exception) {
             false
         }
@@ -234,7 +408,7 @@ object RetainedWebViewManager {
                     if (request == null) return
                     val originUrl = request.origin?.toString().orEmpty()
                     val handler = onWebPermissionRequestHandler
-                    if (handler != null && isSafeHttpUrl(originUrl)) {
+                    if (handler != null && isSecureMediaOrigin(originUrl)) {
                         handler(request)
                     } else {
                         request.deny()
@@ -285,6 +459,8 @@ object RetainedWebViewManager {
                     super.onPageStarted(view, url, favicon)
                     refreshCanGoBack(view)
                     if (!url.isNullOrBlank() && isSafeHttpUrl(url)) {
+                        mainFrameFailedInCurrentLoad = false
+                        lastGoodUrl = url
                         injectWebNotificationBridge(view)
                     }
                 }
@@ -292,6 +468,36 @@ object RetainedWebViewManager {
                 override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
                     super.doUpdateVisitedHistory(view, url, isReload)
                     refreshCanGoBack(view)
+                    if (!url.isNullOrBlank() && isSafeHttpUrl(url)) {
+                        lastGoodUrl = url
+                    }
+                }
+
+                override fun onReceivedError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    error: WebResourceError?
+                ) {
+                    super.onReceivedError(view, request, error)
+                    if (request?.isForMainFrame == true && error != null) {
+                        val isOnlineNow = _continuityState.value.isOnline
+                        if (WebViewOfflineCacheHelper.isNetworkErrorCode(error.errorCode, isOnlineNow)) {
+                            mainFrameFailedInCurrentLoad = true
+                            val prev = _continuityState.value
+                            _continuityState.value = prev.copy(
+                                isOnline = false,
+                                status = OfflineRecoveryStatus.OFFLINE_CACHED,
+                                hadMainFrameError = true,
+                                showingSnapshotShield = true,
+                                statusMessage = if (prev.cachedSnapshot != null) {
+                                    "Offline • Showing cached view until internet returns"
+                                } else {
+                                    "Offline • Waiting for internet connection..."
+                                }
+                            )
+                            WebViewOfflineCacheHelper.applyCacheMode(view, isOnline = false)
+                        }
+                    }
                 }
 
                 override fun onReceivedSslError(
@@ -309,14 +515,30 @@ object RetainedWebViewManager {
                     _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
                     flushCookies()
-                    if (!url.isNullOrBlank() && isSafeHttpUrl(url)) {
+                    val isErrorPage = url.isNullOrBlank() ||
+                        url.startsWith("chrome-error:", ignoreCase = true) ||
+                        url.startsWith("about:", ignoreCase = true)
+                    if (!mainFrameFailedInCurrentLoad && !isErrorPage && isSafeHttpUrl(url.orEmpty())) {
+                        lastGoodUrl = url.orEmpty()
+                        val prev = _continuityState.value
+                        val wasRecovering = prev.status == OfflineRecoveryStatus.RECONNECTING || prev.hadMainFrameError
+                        _continuityState.value = prev.copy(
+                            isOnline = true,
+                            hadMainFrameError = false,
+                            showingSnapshotShield = false,
+                            status = if (wasRecovering) OfflineRecoveryStatus.RESTORED else OfflineRecoveryStatus.ONLINE,
+                            statusMessage = if (wasRecovering) "Back online • Updated to latest" else ""
+                        )
                         injectWebNotificationBridge(view)
+                        view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
                     }
-                    injectMobileLayoutFix(view)
-                    if (domLagBoosterActive) {
-                        injectDomLagOptimizer(view)
-                    } else {
-                        removeDomLagOptimizer(view)
+                    if (!isErrorPage) {
+                        injectMobileLayoutFix(view)
+                        if (domLagBoosterActive) {
+                            injectDomLagOptimizer(view)
+                        } else {
+                            removeDomLagOptimizer(view)
+                        }
                     }
                 }
             }
@@ -329,7 +551,8 @@ object RetainedWebViewManager {
         when {
             isSafeHttpUrl(cleanEndpoint) -> {
                 if (lastLoadedEndpoint != cleanEndpoint) {
-                    lastLoadedEndpoint = cleanEndpoint
+                    updateActiveEndpoint(cleanEndpoint)
+                    mainFrameFailedInCurrentLoad = false
                     webView.loadUrl(cleanEndpoint)
                 }
             }
@@ -337,7 +560,7 @@ object RetainedWebViewManager {
             // while Room is asynchronously restoring saved profiles after biometric unlock or resume.
             isSafeHttpUrl(lastLoadedEndpoint) -> Unit
             lastLoadedEndpoint != "__WELCOME__" -> {
-                lastLoadedEndpoint = "__WELCOME__"
+                updateActiveEndpoint("__WELCOME__")
                 webView.loadDataWithBaseURL(
                     "https://antigravity.local",
                     buildEmptyWebBridgeNoticeHtml(),
@@ -360,13 +583,17 @@ object RetainedWebViewManager {
         if (!isSafeHttpUrl(cleanUrl)) return
         val webView = pinnedWebView ?: return
         if (lastLoadedEndpoint != cleanUrl) {
-            lastLoadedEndpoint = cleanUrl
+            updateActiveEndpoint(cleanUrl)
+            mainFrameFailedInCurrentLoad = false
             webView.loadUrl(cleanUrl)
         }
     }
 
     fun resetToWelcomeScreen() {
-        lastLoadedEndpoint = "__WELCOME__"
+        updateActiveEndpoint("__WELCOME__")
+        lastGoodUrl = ""
+        mainFrameFailedInCurrentLoad = false
+        _continuityState.value = WebViewContinuityState()
         val webView = pinnedWebView ?: return
         webView.loadDataWithBaseURL(
             "https://antigravity.local",
@@ -395,7 +622,12 @@ object RetainedWebViewManager {
         val webView = pinnedWebView ?: return
         val cleanUrl = url.trim()
         if (isSafeHttpUrl(cleanUrl)) {
-            lastLoadedEndpoint = cleanUrl
+            updateActiveEndpoint(cleanUrl)
+            mainFrameFailedInCurrentLoad = false
+            _continuityState.value = _continuityState.value.copy(
+                hadMainFrameError = false,
+                showingSnapshotShield = false
+            )
             webView.loadUrl(cleanUrl)
         } else {
             resetToWelcomeScreen()
@@ -403,15 +635,7 @@ object RetainedWebViewManager {
     }
 
     fun reloadCurrentPage() {
-        val webView = pinnedWebView ?: return
-        webView.post {
-            try {
-                if (isSafeHttpUrl(lastLoadedEndpoint)) {
-                    webView.reload()
-                }
-            } catch (_: Exception) {
-            }
-        }
+        refreshWithSnapshotShield()
     }
 
     fun canGoBack(): Boolean = pinnedWebView?.canGoBack() == true
