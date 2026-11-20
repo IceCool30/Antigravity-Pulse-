@@ -1,7 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -28,20 +31,25 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.NotificationsPaused
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.SettingsApplications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -79,12 +87,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import com.example.notifications.PulseNotificationManager
 import com.example.ui.theme.AntigravityContrastMode
 import com.example.ui.theme.AntigravityThemeMode
 import com.example.ui.theme.AntigravityThemePreset
 import com.example.ui.theme.AppearanceSettings
 import com.example.ui.theme.AvailableAntigravityFonts
 import com.example.ui.theme.AvailableFontSizesPx
+import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.OfficialAntigravityPresets
@@ -94,12 +105,15 @@ import com.example.ui.theme.parseHexColor
 @Composable
 fun AppearanceSettingsSheet(
     settings: AppearanceSettings,
+    permissionsRefreshTick: Int = 0,
     onUpdateSettings: ((AppearanceSettings) -> AppearanceSettings) -> Unit,
     onSelectPreset: (AntigravityThemePreset) -> Unit,
     onResetPreset: () -> Unit,
     onToggleAutoReconnect: (Boolean) -> Unit = {},
     onRequestNotificationPermission: () -> Unit = {},
     onSendTestNotification: () -> Unit = {},
+    onRequestRuntimePermissions: (Array<String>) -> Unit = {},
+    onOpenAppSystemSettings: () -> Unit = {},
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
@@ -896,6 +910,291 @@ fun AppearanceSettingsSheet(
                         ) {
                             Text("Test Alert", color = accent, fontWeight = FontWeight.Bold)
                         }
+                    }
+                }
+            }
+
+            // SECTION 1D: Device Permissions (Microphone, Camera, Notifications & Native File Access)
+            item(key = "device_permissions_$permissionsRefreshTick") {
+                val micGranted = remember(permissionsRefreshTick) {
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                }
+                val cameraGranted = remember(permissionsRefreshTick) {
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                }
+                val notificationsGranted = remember(permissionsRefreshTick) {
+                    PulseNotificationManager.hasNotificationPermission(context)
+                }
+                val missingPermissions = remember(micGranted, cameraGranted, notificationsGranted) {
+                    buildList {
+                        if (!micGranted) add(Manifest.permission.RECORD_AUDIO)
+                        if (!cameraGranted) add(Manifest.permission.CAMERA)
+                        if (!notificationsGranted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            add(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Device Permissions",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = fg
+                    )
+                    if (missingPermissions.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = { onRequestRuntimePermissions(missingPermissions.toTypedArray()) },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("enable_all_permissions_button")
+                        ) {
+                            Text("Enable All", color = accent, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .frostedGlass(
+                            shape = RoundedCornerShape(20.dp),
+                            baseColor = surface,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrostedGlass,
+                            fillAlpha = 0.82f,
+                            tintAlpha = 0.06f,
+                            borderAlpha = 0.58f
+                        )
+                ) {
+                    // Microphone (Voice Input for Remote & AI Studio)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = null,
+                                    tint = if (micGranted) EmeraldOnline else accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Microphone (Voice Input)",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Enables direct voice dictation & Gemini Live audio inside Remote and AI Studio",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (micGranted) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.testTag("permission_mic_granted_badge")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Microphone Active",
+                                    tint = EmeraldOnline,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Active",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = EmeraldOnline,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    onRequestRuntimePermissions(arrayOf(Manifest.permission.RECORD_AUDIO))
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("permission_mic_enable_button")
+                            ) {
+                                Text("Enable", color = accent, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Camera (QR Pairing & Live Video Input)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = null,
+                                    tint = if (cameraGranted) EmeraldOnline else accent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Camera (QR & Live Video)",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Used for QR workstation pairing and camera streaming in AI Studio",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        if (cameraGranted) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.testTag("permission_camera_granted_badge")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Camera Active",
+                                    tint = EmeraldOnline,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Active",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = EmeraldOnline,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    onRequestRuntimePermissions(arrayOf(Manifest.permission.CAMERA))
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("permission_camera_enable_button")
+                            ) {
+                                Text("Enable", color = accent, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // File Access (Zero-Permission Native Picker & Downloads)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderOpen,
+                                    contentDescription = null,
+                                    tint = EmeraldOnline,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Files, Photos & Downloads",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = fg
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "Uses Android's built-in system picker & Downloads manager—full access with zero broad storage permissions required",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = secondaryFg
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.testTag("permission_files_ready_badge")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "Native File Access Ready",
+                                tint = EmeraldOnline,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Ready",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = EmeraldOnline,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = border, thickness = 1.dp)
+
+                    // Open Android App Info (for permanently denied permissions or battery unrestricted)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenAppSystemSettings() }
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .testTag("open_system_app_permissions_button"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SettingsApplications,
+                                contentDescription = null,
+                                tint = secondaryFg,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Open Android App Permissions & Battery Settings",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = fg
+                            )
+                        }
+                        Text(
+                            text = "Open",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = accent,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }

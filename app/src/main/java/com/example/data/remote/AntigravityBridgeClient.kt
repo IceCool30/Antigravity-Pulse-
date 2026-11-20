@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -56,6 +57,9 @@ object RetainedWebViewManager {
     private val _canGoBackState = MutableStateFlow(false)
     val canGoBackState: StateFlow<Boolean> = _canGoBackState.asStateFlow()
 
+    private val _pageLoadProgress = MutableStateFlow(100)
+    val pageLoadProgress: StateFlow<Int> = _pageLoadProgress.asStateFlow()
+
     private fun refreshCanGoBack(view: WebView? = pinnedWebView) {
         _canGoBackState.value = try {
             view?.canGoBack() == true
@@ -66,9 +70,21 @@ object RetainedWebViewManager {
 
     /**
      * Activity-registered callback for `<input type="file">` / folder attachment buttons
-     * inside Google Antigravity Remote (e.g., the `+` button).
+     * inside Google Antigravity Remote & Google AI Studio (e.g., the `+` button).
      */
     var onShowFileChooserHandler: ((ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams?) -> Boolean)? = null
+
+    /**
+     * Activity-registered runtime permission bridge for WebView `getUserMedia` requests
+     * (microphone voice input & camera live input) across Remote and Google AI Studio.
+     */
+    var onWebPermissionRequestHandler: ((PermissionRequest) -> Unit)? = null
+    var onWebPermissionRequestCanceled: ((PermissionRequest) -> Unit)? = null
+
+    /**
+     * Activity-registered native download handler for files exported from Remote or AI Studio.
+     */
+    var onWebDownloadRequested: ((url: String, userAgent: String, contentDisposition: String, mimeType: String) -> Unit)? = null
 
     /**
      * Activity-registered callback receiving sanitized remote PWA web notifications
@@ -195,6 +211,11 @@ object RetainedWebViewManager {
             } catch (_: Exception) {
             }
             webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    super.onProgressChanged(view, newProgress)
+                    _pageLoadProgress.value = newProgress.coerceIn(0, 100)
+                }
+
                 override fun onShowFileChooser(
                     webView: WebView?,
                     filePathCallback: ValueCallback<Array<Uri>>?,
@@ -209,6 +230,23 @@ object RetainedWebViewManager {
                     return false
                 }
 
+                override fun onPermissionRequest(request: PermissionRequest?) {
+                    if (request == null) return
+                    val originUrl = request.origin?.toString().orEmpty()
+                    val handler = onWebPermissionRequestHandler
+                    if (handler != null && isSafeHttpUrl(originUrl)) {
+                        handler(request)
+                    } else {
+                        request.deny()
+                    }
+                }
+
+                override fun onPermissionRequestCanceled(request: PermissionRequest?) {
+                    if (request != null) {
+                        onWebPermissionRequestCanceled?.invoke(request)
+                    }
+                }
+
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                     val raw = consoleMessage?.message()
                     if (raw != null && raw.startsWith(PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX)) {
@@ -221,6 +259,16 @@ object RetainedWebViewManager {
                         return true
                     }
                     return super.onConsoleMessage(consoleMessage)
+                }
+            }
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                if (isSafeHttpUrl(url)) {
+                    onWebDownloadRequested?.invoke(
+                        url,
+                        userAgent.orEmpty(),
+                        contentDisposition.orEmpty(),
+                        mimeType.orEmpty()
+                    )
                 }
             }
             webViewClient = object : WebViewClient() {
@@ -258,6 +306,7 @@ object RetainedWebViewManager {
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
+                    _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
                     flushCookies()
                     if (!url.isNullOrBlank() && isSafeHttpUrl(url)) {
@@ -817,14 +866,21 @@ object RetainedWebViewManager {
     fun injectDomLagOptimizer(webView: WebView? = pinnedWebView) {
         domLagBoosterActive = true
         val target = webView ?: return
+        // Preserve CSS animations so running spinners, progress rings, and thinking indicators
+        // stay fluid while eliminating 300ms tap delay and heavy smooth-scroll jank.
         val js = """
             (function() {
               var id = 'antigravity-pulse-dom-booster';
-              if (!document.getElementById(id) && document.head) {
-                var style = document.createElement('style');
+              var style = document.getElementById(id);
+              if (!style && document.head) {
+                style = document.createElement('style');
                 style.id = id;
-                style.textContent = '*, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.05ms !important; scroll-behavior: auto !important; }';
                 document.head.appendChild(style);
+              }
+              if (style) {
+                style.textContent =
+                  'html, body { scroll-behavior: auto !important; -webkit-tap-highlight-color: transparent !important; } ' +
+                  'a, button, input, textarea, [role="button"] { touch-action: manipulation !important; }';
               }
             })();
         """.trimIndent()
@@ -853,7 +909,7 @@ object RetainedWebViewManager {
         }
     }
 
-    private fun buildEmptyWebBridgeNoticeHtml(): String {
+    fun buildEmptyWebBridgeNoticeHtml(): String {
         return """
             <!DOCTYPE html>
             <html>
@@ -862,15 +918,19 @@ object RetainedWebViewManager {
               <style>
                 * { box-sizing: border-box; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
                 html, body {
-                  margin: 0; padding: 24px 18px; width: 100%; max-width: 100vw; overflow-x: hidden;
+                  margin: 0; padding: 24px 16px 40px 16px; width: 100%; max-width: 100vw; overflow-x: hidden;
                   background: #000000; color: #FFFFFF;
                   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                  display: flex; flex-direction: column; align-items: center; justify-content: center;
-                  min-height: 84vh; text-align: left;
+                  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+                  min-height: 100vh; text-align: left; gap: 16px;
                 }
                 .box {
-                  width: 100%; max-width: 390px; background: #0A0A0D; border: 1px solid #202026;
-                  border-radius: 20px; padding: 24px 22px;
+                  width: 100%; max-width: 420px; background: #0A0A0D; border: 1px solid #202026;
+                  border-radius: 22px; padding: 22px 20px;
+                }
+                .box.studio {
+                  border-color: rgba(125, 211, 252, 0.28);
+                  background: linear-gradient(180deg, rgba(125, 211, 252, 0.06) 0%, #0A0A0D 42%);
                 }
                 .badge {
                   display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
@@ -878,23 +938,39 @@ object RetainedWebViewManager {
                   border: 1px solid rgba(255, 199, 153, 0.28); border-radius: 999px;
                   padding: 4px 10px; margin-bottom: 12px;
                 }
+                .badge.studio {
+                  color: #7DD3FC; background: rgba(125, 211, 252, 0.12);
+                  border-color: rgba(125, 211, 252, 0.32);
+                }
+                .section-label {
+                  font-size: 11px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase;
+                  color: #A1A1AA; margin: 0 0 12px 0;
+                }
                 h3 { margin: 0 0 8px 0; color: #FFFFFF; font-size: 20px; font-weight: 700; }
-                p.lead { margin: 0 0 18px 0; color: #A1A1AA; font-size: 13.5px; line-height: 1.5; }
+                p.lead { margin: 0 0 16px 0; color: #A1A1AA; font-size: 13.5px; line-height: 1.5; }
                 .step {
                   display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px;
                 }
+                .step:last-of-type { margin-bottom: 0; }
                 .num {
                   flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
                   background: rgba(255, 199, 153, 0.16); color: #FFC799;
                   font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
                   margin-top: 1px;
                 }
+                .num.studio {
+                  background: rgba(125, 211, 252, 0.16); color: #7DD3FC;
+                }
                 .step-text { color: #D4D4D8; font-size: 13px; line-height: 1.48; }
                 .step-text strong { color: #FFFFFF; }
                 .hint {
-                  margin-top: 16px; padding: 10px 12px; border-radius: 12px;
+                  margin-top: 16px; padding: 11px 13px; border-radius: 12px;
                   background: rgba(255, 199, 153, 0.08); border: 1px solid rgba(255, 199, 153, 0.24);
-                  color: #FFC799; font-size: 12px; line-height: 1.45;
+                  color: #FFC799; font-size: 12px; line-height: 1.48;
+                }
+                .hint.studio {
+                  background: rgba(125, 211, 252, 0.08); border-color: rgba(125, 211, 252, 0.24);
+                  color: #BAE6FD;
                 }
               </style>
             </head>
@@ -902,7 +978,8 @@ object RetainedWebViewManager {
               <div class="box">
                 <div class="badge">Antigravity Pulse</div>
                 <h3>Welcome</h3>
-                <p class="lead">Connect your phone to your remote session in seconds with fullscreen controls and zero-reload RAM pinning.</p>
+                <p class="lead">Connect your phone to Antigravity Remote and Google AI Studio with fullscreen controls, voice input, native file access, and zero-reload RAM pinning.</p>
+                <div class="section-label">How to Use Antigravity Remote</div>
                 <div class="step">
                   <div class="num">1</div>
                   <div class="step-text">Tap the translucent <strong>side handle</strong> to <strong>Scan QR Code</strong> or paste your <strong>Remote URL</strong>.</div>
@@ -913,9 +990,27 @@ object RetainedWebViewManager {
                 </div>
                 <div class="step">
                   <div class="num">3</div>
-                  <div class="step-text">Use the <strong>+</strong> button inside your session to attach files directly from phone storage, and <strong>Cloud Sync</strong> to back up hosts.</div>
+                  <div class="step-text">Tap <strong>+</strong> to attach files from your phone, tap the <strong>microphone</strong> for voice input, and use <strong>Cloud Sync</strong> to back up hosts &amp; prompts.</div>
                 </div>
-                <div class="hint">Tip: Open Settings from the side handle to customize themes, biometric lock, and notification controls.</div>
+              </div>
+
+              <div class="box studio">
+                <div class="badge studio">Google AI Studio &bull; Pinned in RAM</div>
+                <h3>AI Studio — How to Use It</h3>
+                <p class="lead">Run Gemini prompts, open Build Apps, and browse your Drive library in distraction-free fullscreen without losing your session when switching tabs.</p>
+                <div class="step">
+                  <div class="num studio">1</div>
+                  <div class="step-text">Tap the translucent <strong>side handle</strong> and select <strong>AI Studio</strong> (or switch tabs when bars are shown) to launch <strong>aistudio.google.com</strong> in fullscreen.</div>
+                </div>
+                <div class="step">
+                  <div class="num studio">2</div>
+                  <div class="step-text">While inside AI Studio, tap the <strong>side handle</strong> anytime for one-tap <strong>Prompts</strong>, <strong>Build Apps</strong>, <strong>Library</strong>, <strong>Reload</strong>, and <strong>Open in Browser</strong> shortcuts without cluttering your view.</div>
+                </div>
+                <div class="step">
+                  <div class="num studio">3</div>
+                  <div class="step-text">Keep <strong>Lag Booster</strong> active for smoother scrolling, tap the <strong>microphone / camera</strong> icons for voice &amp; live input, and tap <strong>+</strong> to upload photos, PDFs, or code files directly from Android.</div>
+                </div>
+                <div class="hint studio">Tip: Open <strong>Settings &rarr; Device Permissions</strong> from the side handle to verify Microphone, Camera, Notifications, and Native File Access anytime.</div>
               </div>
             </body>
             </html>

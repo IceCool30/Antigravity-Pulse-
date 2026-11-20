@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,6 +28,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,6 +71,7 @@ fun AiStudioWebScreen(
 ) {
     val context = LocalContext.current
     val activeSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
+    val loadProgress by AiStudioPinnedWebViewManager.pageLoadProgress.collectAsStateWithLifecycle()
 
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
@@ -231,6 +234,18 @@ fun AiStudioWebScreen(
                 }
                 HorizontalDivider(color = border, thickness = 1.dp)
             }
+        }
+
+        if (loadProgress in 1..99) {
+            LinearProgressIndicator(
+                progress = { loadProgress / 100f },
+                color = accent,
+                trackColor = border.copy(alpha = 0.35f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.5.dp)
+                    .testTag("ai_studio_load_progress")
+            )
         }
 
         // Full-bleed RAM-Pinned Google AI Studio WebView

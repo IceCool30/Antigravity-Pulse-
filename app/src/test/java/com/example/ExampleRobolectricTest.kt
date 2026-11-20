@@ -460,4 +460,58 @@ class ExampleRobolectricTest {
         composeTestRule.waitForIdle()
         assertFalse(lagBoosterEnabled)
     }
+
+    @Test
+    fun `welcome page includes AI Studio guide and WebView permission bridge maps mic and camera safely`() {
+        val welcomeHtml = RetainedWebViewManager.buildEmptyWebBridgeNoticeHtml()
+        assertTrue(welcomeHtml.contains("How to Use Antigravity Remote"))
+        assertTrue(welcomeHtml.contains("AI Studio — How to Use It"))
+        assertTrue(welcomeHtml.contains("Build Apps"))
+        assertTrue(welcomeHtml.contains("Prompts"))
+        assertTrue(welcomeHtml.contains("Lag Booster"))
+        assertTrue(welcomeHtml.contains("microphone"))
+        assertTrue(welcomeHtml.contains("Device Permissions"))
+
+        // Verify least-privilege WebView permission mapper maps mic & camera and rejects unsupported types
+        val (audioRes, audioPerms) = resolveAllowedWebResourcesAndPermissions(
+            arrayOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+        )
+        assertEquals(listOf(android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE), audioRes)
+        assertEquals(listOf(android.Manifest.permission.RECORD_AUDIO), audioPerms)
+
+        val (bothRes, bothPerms) = resolveAllowedWebResourcesAndPermissions(
+            arrayOf(
+                android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE,
+                android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE,
+                android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID,
+                android.webkit.PermissionRequest.RESOURCE_MIDI_SYSEX
+            )
+        )
+        assertEquals(
+            listOf(
+                android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE,
+                android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE
+            ),
+            bothRes
+        )
+        assertEquals(
+            listOf(
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.CAMERA
+            ),
+            bothPerms
+        )
+
+        val (deniedRes, deniedPerms) = resolveAllowedWebResourcesAndPermissions(
+            arrayOf(android.webkit.PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID)
+        )
+        assertTrue(deniedRes.isEmpty())
+        assertTrue(deniedPerms.isEmpty())
+
+        // Verify download and web permission hooks attach & clear cleanly
+        RetainedWebViewManager.onWebDownloadRequested = { _, _, _, _ -> }
+        assertNotNull(RetainedWebViewManager.onWebDownloadRequested)
+        RetainedWebViewManager.onWebDownloadRequested = null
+        assertNull(RetainedWebViewManager.onWebDownloadRequested)
+    }
 }

@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -49,6 +50,9 @@ object AiStudioPinnedWebViewManager {
 
     private val _activeSectionState = MutableStateFlow(AiStudioWebSection.NEW_CHAT)
     val activeSectionState: StateFlow<AiStudioWebSection> = _activeSectionState.asStateFlow()
+
+    private val _pageLoadProgress = MutableStateFlow(100)
+    val pageLoadProgress: StateFlow<Int> = _pageLoadProgress.asStateFlow()
 
     private fun updateSectionFromUrl(url: String) {
         val lower = url.lowercase()
@@ -129,15 +133,22 @@ object AiStudioPinnedWebViewManager {
     fun applyLagBooster(enabled: Boolean) {
         domLagBoosterActive = enabled
         val target = pinnedAiStudioWebView ?: return
+        // Never override `animation-duration` so loading spinners, running rings, and thinking
+        // indicators always animate smoothly while scrolling and taps stay instant.
         val js = if (enabled) {
             """
             (function() {
               var id = 'antigravity-pulse-dom-booster';
-              if (!document.getElementById(id) && document.head) {
-                var style = document.createElement('style');
+              var style = document.getElementById(id);
+              if (!style && document.head) {
+                style = document.createElement('style');
                 style.id = id;
-                style.textContent = '*, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.05ms !important; scroll-behavior: auto !important; }';
                 document.head.appendChild(style);
+              }
+              if (style) {
+                style.textContent =
+                  'html, body { scroll-behavior: auto !important; -webkit-tap-highlight-color: transparent !important; } ' +
+                  'a, button, input, textarea, [role="button"] { touch-action: manipulation !important; }';
               }
             })();
             """.trimIndent()
@@ -302,6 +313,11 @@ object AiStudioPinnedWebViewManager {
             }
 
             webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    super.onProgressChanged(view, newProgress)
+                    _pageLoadProgress.value = newProgress.coerceIn(0, 100)
+                }
+
                 override fun onShowFileChooser(
                     webView: WebView?,
                     filePathCallback: ValueCallback<Array<Uri>>?,
@@ -314,6 +330,23 @@ object AiStudioPinnedWebViewManager {
                     }
                     filePathCallback.onReceiveValue(null)
                     return false
+                }
+
+                override fun onPermissionRequest(request: PermissionRequest?) {
+                    if (request == null) return
+                    val originUrl = request.origin?.toString().orEmpty()
+                    val handler = RetainedWebViewManager.onWebPermissionRequestHandler
+                    if (handler != null && RetainedWebViewManager.isSafeHttpUrl(originUrl)) {
+                        handler(request)
+                    } else {
+                        request.deny()
+                    }
+                }
+
+                override fun onPermissionRequestCanceled(request: PermissionRequest?) {
+                    if (request != null) {
+                        RetainedWebViewManager.onWebPermissionRequestCanceled?.invoke(request)
+                    }
                 }
 
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
@@ -330,6 +363,17 @@ object AiStudioPinnedWebViewManager {
                         return true
                     }
                     return super.onConsoleMessage(consoleMessage)
+                }
+            }
+
+            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                    RetainedWebViewManager.onWebDownloadRequested?.invoke(
+                        url,
+                        userAgent.orEmpty(),
+                        contentDisposition.orEmpty(),
+                        mimeType.orEmpty()
+                    )
                 }
             }
 
@@ -374,6 +418,7 @@ object AiStudioPinnedWebViewManager {
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
+                    _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
                     flushCookies()
                     if (!url.isNullOrBlank() && RetainedWebViewManager.isSafeHttpUrl(url)) {

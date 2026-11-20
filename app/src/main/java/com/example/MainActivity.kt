@@ -2,17 +2,24 @@ package com.example
 
 import android.Manifest
 import android.app.Activity
+import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.MimeTypeMap
+import android.webkit.PermissionRequest
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import java.util.concurrent.atomic.AtomicBoolean
@@ -428,6 +435,31 @@ private enum class PulseTab(
     STORAGE_SYNC(R.string.nav_sync, Icons.Default.CloudSync, "nav_tab_sync")
 }
 
+/**
+ * Maps incoming WebView `getUserMedia` permission requests strictly to the least-privilege
+ * Android runtime permissions (`RECORD_AUDIO` for voice input and `CAMERA` for live video),
+ * rejecting any unsupported or sensitive WebView resource types.
+ */
+internal fun resolveAllowedWebResourcesAndPermissions(
+    requestedResources: Array<String>
+): Pair<List<String>, List<String>> {
+    val allowedResources = mutableListOf<String>()
+    val androidPermissions = mutableListOf<String>()
+    for (resource in requestedResources) {
+        when (resource) {
+            PermissionRequest.RESOURCE_AUDIO_CAPTURE -> {
+                allowedResources.add(resource)
+                androidPermissions.add(Manifest.permission.RECORD_AUDIO)
+            }
+            PermissionRequest.RESOURCE_VIDEO_CAPTURE -> {
+                allowedResources.add(resource)
+                androidPermissions.add(Manifest.permission.CAMERA)
+            }
+        }
+    }
+    return allowedResources.distinct() to androidPermissions.distinct()
+}
+
 @Composable
 fun AntigravityPulseApp(
     appearance: AppearanceSettings,
@@ -494,7 +526,10 @@ fun AntigravityPulseApp(
                     addCategory(Intent.CATEGORY_OPENABLE)
                     type = "*/*"
                     putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    )
 
                     val rawAccepts = fileChooserParams?.acceptTypes
                         ?.flatMap { it.split(",") }
@@ -523,9 +558,21 @@ fun AntigravityPulseApp(
                 webFilePickerLauncher.launch(Intent.createChooser(openDocIntent, chooserTitle))
                 true
             } catch (_: Exception) {
-                pendingFileCallback?.onReceiveValue(null)
-                pendingFileCallback = null
-                false
+                // Fallback for OEM ROMs where ACTION_OPEN_DOCUMENT is unavailable
+                try {
+                    val getContentIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    webFilePickerLauncher.launch(Intent.createChooser(getContentIntent, "Select files from device"))
+                    true
+                } catch (_: Exception) {
+                    pendingFileCallback?.onReceiveValue(null)
+                    pendingFileCallback = null
+                    false
+                }
             }
         }
 
@@ -536,12 +583,153 @@ fun AntigravityPulseApp(
         }
     }
 
+    // Native Android Runtime Permission Bridge for WebView Microphone (Voice Input) & Camera
+    var permissionsRefreshTick by remember { mutableIntStateOf(0) }
+    var pendingWebPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+
+    val runtimePermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grantResults ->
+        permissionsRefreshTick += 1
+        val pending = pendingWebPermissionRequest
+        pendingWebPermissionRequest = null
+        if (pending != null) {
+            val (allowedResources, _) = resolveAllowedWebResourcesAndPermissions(pending.resources)
+            val approvedResources = allowedResources.filter { res ->
+                when (res) {
+                    PermissionRequest.RESOURCE_AUDIO_CAPTURE ->
+                        grantResults[Manifest.permission.RECORD_AUDIO] == true ||
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    PermissionRequest.RESOURCE_VIDEO_CAPTURE ->
+                        grantResults[Manifest.permission.CAMERA] == true ||
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                    else -> false
+                }
+            }
+            if (approvedResources.isNotEmpty()) {
+                try {
+                    pending.grant(approvedResources.toTypedArray())
+                } catch (_: Exception) {
+                }
+            } else {
+                try {
+                    pending.deny()
+                } catch (_: Exception) {
+                }
+                antigravityViewModel.recordWebViewBridgeEvent(
+                    "Microphone/Camera permission denied. Enable in Settings -> Device Permissions."
+                )
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        RetainedWebViewManager.onWebPermissionRequestHandler = { request ->
+            val (allowedResources, neededPerms) = resolveAllowedWebResourcesAndPermissions(request.resources)
+            if (allowedResources.isEmpty()) {
+                try {
+                    request.deny()
+                } catch (_: Exception) {
+                }
+            } else {
+                val missingPerms = neededPerms.filter { perm ->
+                    ContextCompat.checkSelfPermission(context, perm) != PackageManager.PERMISSION_GRANTED
+                }
+                if (missingPerms.isEmpty()) {
+                    try {
+                        request.grant(allowedResources.toTypedArray())
+                    } catch (_: Exception) {
+                    }
+                } else {
+                    pendingWebPermissionRequest?.let { stale ->
+                        try {
+                            stale.deny()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    pendingWebPermissionRequest = request
+                    runtimePermissionsLauncher.launch(missingPerms.toTypedArray())
+                }
+            }
+        }
+
+        RetainedWebViewManager.onWebPermissionRequestCanceled = { canceledRequest ->
+            if (pendingWebPermissionRequest === canceledRequest) {
+                pendingWebPermissionRequest = null
+            }
+        }
+
+        RetainedWebViewManager.onWebDownloadRequested = { url, userAgent, contentDisposition, mimeType ->
+            if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                val safeFileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+                    .ifBlank { "antigravity-download" }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                        val dmReq = DownloadManager.Request(Uri.parse(url)).apply {
+                            val resolvedMime = mimeType.takeIf { it.isNotBlank() }
+                            if (resolvedMime != null) setMimeType(resolvedMime)
+                            val cookies = try {
+                                CookieManager.getInstance().getCookie(url)
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (!cookies.isNullOrBlank()) {
+                                addRequestHeader("Cookie", cookies)
+                            }
+                            if (userAgent.isNotBlank()) {
+                                addRequestHeader("User-Agent", userAgent)
+                            }
+                            setTitle(safeFileName)
+                            setDescription("Downloading via Antigravity Pulse")
+                            setNotificationVisibility(
+                                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                            )
+                            setDestinationInExternalPublicDir(
+                                Environment.DIRECTORY_DOWNLOADS,
+                                safeFileName
+                            )
+                        }
+                        dm?.enqueue(dmReq)
+                        antigravityViewModel.recordWebViewBridgeEvent("Downloading $safeFileName to Downloads...")
+                    } catch (_: Exception) {
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (_: Exception) {
+                            antigravityViewModel.recordWebViewBridgeEvent("Unable to start download.")
+                        }
+                    }
+                } else {
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (_: Exception) {
+                        antigravityViewModel.recordWebViewBridgeEvent("No browser available to download file.")
+                    }
+                }
+            }
+        }
+
+        onDispose {
+            pendingWebPermissionRequest?.let { stale ->
+                try {
+                    stale.deny()
+                } catch (_: Exception) {
+                }
+            }
+            pendingWebPermissionRequest = null
+            RetainedWebViewManager.onWebPermissionRequestHandler = null
+            RetainedWebViewManager.onWebPermissionRequestCanceled = null
+            RetainedWebViewManager.onWebDownloadRequested = null
+        }
+    }
+
     // Android 13+ (API 33+) runtime notification permission launcher
     var pendingSendTestNotification by remember { mutableStateOf(false) }
     var hasPromptedNotificationPermission by rememberSaveable { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
+        permissionsRefreshTick += 1
         if (granted && pendingSendTestNotification) {
             pendingSendTestNotification = false
             PulseNotificationManager.showTestNotification(context)
@@ -731,12 +919,28 @@ fun AntigravityPulseApp(
             ) {
                 AppearanceSettingsSheet(
                     settings = appearance,
+                    permissionsRefreshTick = permissionsRefreshTick,
                     onUpdateSettings = onUpdateAppearance,
                     onSelectPreset = onSelectPreset,
                     onResetPreset = onResetPreset,
                     onToggleAutoReconnect = antigravityViewModel::setAutoReconnectEnabled,
                     onRequestNotificationPermission = { requestNotificationPermissionIfNeeded(false) },
                     onSendTestNotification = { requestNotificationPermissionIfNeeded(true) },
+                    onRequestRuntimePermissions = { permissionsToRequest ->
+                        if (permissionsToRequest.isNotEmpty()) {
+                            runtimePermissionsLauncher.launch(permissionsToRequest)
+                        }
+                    },
+                    onOpenAppSystemSettings = {
+                        try {
+                            val appSettingsIntent = Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null)
+                            )
+                            context.startActivity(appSettingsIntent)
+                        } catch (_: Exception) {
+                        }
+                    },
                     onClose = { showAppearanceSheet = false }
                 )
             }

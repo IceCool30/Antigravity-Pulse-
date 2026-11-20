@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -36,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
 import com.example.ui.theme.EmeraldOnline
@@ -57,6 +60,7 @@ fun RetainedWebViewBridgeScreen(
     val surface = appearance.surfaceColor
     val secondaryFg = appearance.secondaryTextColor
     val accent = appearance.accentColor
+    val loadProgress by RetainedWebViewManager.pageLoadProgress.collectAsStateWithLifecycle()
 
     val effectiveEndpoint = telemetry.activeEndpoint.trim()
         .ifBlank { savedFallbackEndpoint.trim() }
@@ -189,6 +193,18 @@ fun RetainedWebViewBridgeScreen(
                     )
                 }
             }
+        }
+
+        if (loadProgress in 1..99) {
+            LinearProgressIndicator(
+                progress = { loadProgress / 100f },
+                color = accent,
+                trackColor = appearance.borderColor.copy(alpha = 0.35f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.5.dp)
+                    .testTag("remote_webview_load_progress")
+            )
         }
 
         // Full-bleed Memory-Pinned WebView Instance
