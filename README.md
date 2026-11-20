@@ -6,7 +6,7 @@
 [![Jetpack Compose](https://img.shields.io/badge/UI-Jetpack%20Compose%20%2B%20Material%20You-4285F4.svg)](https://developer.android.com/compose)
 [![Download APK](https://img.shields.io/badge/Download-APK%20via%20Releases-FFC799.svg?style=flat&logo=android&logoColor=000000)](https://github.com/IceCool30/Antigravity-Pulse-/releases/latest)
 
-**Antigravity Pulse** is a fast, fullscreen-first open-source Android companion designed for connecting to remote desktop sessions over HTTPS/WSS from your phone. Built with Kotlin, Jetpack Compose, **Material You dynamic colors**, and **subtle frosted glass surfaces** on a true `#000000` OLED dark interface, it keeps your active remote session pinned in RAM with zero reloads, provides a compact translucent movable control handle, supports native Android file uploads, and syncs your saved hosts and reusable prompts across devices.
+**Antigravity Pulse** is a fast, fullscreen-first open-source Android companion designed for connecting to remote desktop sessions and Google AI Studio from your phone. Built with Kotlin, Jetpack Compose, **Material You dynamic colors**, and **subtle frosted glass surfaces** on a true `#000000` OLED dark interface, it keeps your active remote session and Google AI Studio pinned in RAM with zero reloads, provides a compact translucent movable control handle, supports native Android file uploads, and syncs your saved hosts and reusable prompts across devices.
 
 ---
 
@@ -16,7 +16,7 @@ You do **not** need Android Studio or a computer to install Antigravity Pulse. Y
 
 ### Option 1: Direct APK Download (Recommended)
 1. Open this repository's **[Releases](https://github.com/IceCool30/Antigravity-Pulse-/releases/latest)** page on your Android phone.
-2. Under **Assets**, tap the **`.apk`** file to download it.
+2. Under **Assets**, tap the **`Antigravity-Pulse-v1.1.0.apk`** file to download it.
 3. Open the downloaded `.apk` file from your notification shade or Files app.
 4. If Android prompts you, tap **Settings** and enable **Allow from this source** for your browser or file manager, then tap **Install**.
 5. Launch **Antigravity Pulse** from your home screen.
@@ -32,29 +32,47 @@ If you use [Obtainium](https://github.com/ImranR98/Obtainium) to track open-sour
 
 ---
 
-## Features
+## 3 Main Tabs & Core Architecture
+
+1. **Remote (`RetainedWebViewBridgeScreen`)**
+   - RAM-pinned fullscreen WebView for remote Antigravity and workstation desktop sessions.
+   - Zero-reload session retention across tab switching and phone backgrounding.
+   - Native file attachment picker (`ACTION_OPEN_DOCUMENT`) and PWA notification bridge.
+2. **AI Studio (`AiStudioWebScreen`)**
+   - Pure fullscreen RAM-pinned `aistudio.google.com` workspace for direct mobile access to **Prompts**, **Build Apps**, and **Drive Library**.
+   - In distraction-free fullscreen mode, quick action buttons (`Prompts`, `Build Apps`, `Library`, `Lag Booster`, `Reload`, `Open in Browser`) live unobtrusively inside the translucent movable floating panel (`MovableFloatingControlPanel`).
+   - When system bars are visible, an intuitive collapsible toolbar provides quick navigation.
+3. **Cloud Sync (`StorageAndCloudSyncScreen`)**
+   - Streamlined Room v4 local database (`server_profiles`) with non-destructive migrations (`MIGRATION_2_3` and `MIGRATION_3_4`).
+   - Google Sign-In via Jetpack Credential Manager and Firebase Firestore syncing `users/{uid}/serverProfiles` and `users/{uid}/copilotPrompts` with strict default-deny rules.
+
+---
+
+## Key Features
 
 - **Fullscreen-First OLED Experience (`#000000`)**
-  Launches directly into distraction-free fullscreen mode on true `#000000` OLED black so your remote session uses every pixel of your screen.
+  Launches directly into distraction-free fullscreen mode on true `#000000` OLED black with zero flash on startup.
+- **Dual RAM-Pinned WebViews with Zero Tab Eviction**
+  Both the Remote workstation session and Google AI Studio Web remain pinned in application memory simultaneously. Switch between tabs instantly without cold reloads.
 - **Compact Translucent Movable Side Handle**
-  - Docks cleanly as a sleek slim edge tab when placed along the left or right screen edge.
-  - Morphs into a compact rounded floating pill when dragged anywhere else on screen.
-  - Remembers your preferred position automatically across restarts.
-  - Tap once to open quick controls (Switch Host, Scan QR, Reload, Cloud Sync, Settings, Show/Hide Bars).
-- **Zero-Reload RAM-Pinned Session Bridge**
-  Keeps your active remote WebView pinned in memory when switching between tabs or opening settings, with an optional **DOM Lag Booster** for smoother scrolling on heavy pages.
+  - Docks cleanly as a sleek edge tab when placed along screen edges.
+  - Morphs into a compact rounded floating pill when dragged anywhere on screen.
+  - Remembers its exact position across app launches.
+  - Provides instant access to host switching, QR pairing, AI Studio shortcuts, DOM Lag Booster, and system bar toggles.
+- **Idle-Aware DOM Lag Booster**
+  Hardware-accelerated CSS animation layer and dirty-state throttling that drops CPU utilization to 0% when pages are idle, maximizing battery longevity.
 - **Instant QR Pairing & Multi-Host Manager**
-  Scan pairing QR codes (`https://`, `http://`, `antigravity://pair`, or JSON payloads) using CameraX + ML Kit, or paste any remote URL manually and switch between saved workstations in one tap.
+  Scan pairing QR codes using CameraX + ML Kit with strict scheme sanitization, or paste any remote URL manually to switch workstations in one tap.
 - **Native Android File Picker (`+` Attachment Support)**
-  Clicking the `+` / upload button inside your remote session opens Android's native Storage Access Framework document picker (`ACTION_OPEN_DOCUMENT`) with multi-file selection and **zero broad storage permissions**.
-- **Cloud Sync (Saved Hosts & Reusable Prompts)**
-  Sign in with Google via Jetpack Credential Manager to back up and restore your saved remote host bookmarks and reusable prompt templates using Firebase Firestore.
+  Opens Android's native Storage Access Framework document picker (`ACTION_OPEN_DOCUMENT`) with multi-file selection and zero broad storage permissions.
 - **Native Agent & App Notifications**
-  Bridges remote PWA notifications (`window.Notification` & `ServiceWorkerRegistration.showNotification`) straight into native Android heads-up notifications so your phone alerts you the moment your agent finishes a task or asks for approval—plus dedicated channels for host connections, security warnings, and Cloud Sync activity. Tapping any notification jumps directly back into your active session without reloading.
-- **Biometric App Lock**
-  Optionally protect saved host URLs and auth tokens with Android Fingerprint, Face Unlock, or Device PIN/Pattern.
-- **Material You + Subtle Frosted Glass UI (`#000000` OLED)**
-  Adapts accent colors dynamically from your Android 12+ wallpaper (Material You) while preserving a true `#000000` OLED black background, paired with GPU-friendly translucent frosted glass surfaces and specular hairline borders. Both **Material You Dynamic Color** and **Frosted Glass Surfaces** can be toggled anytime in Settings alongside 12 hand-tuned dark presets, custom hex pickers, contrast modes, font families, and font sizing.
+  Bridges remote PWA notifications straight into native Android heads-up alerts so you never miss an agent task completion.
+- **Smart 60-Second Biometric Re-Lock & `FLAG_SECURE`**
+  Protects sensitive workstation sessions with biometric authentication that automatically re-locks after 60 seconds in the background, with `FLAG_SECURE` preventing Recents screen leaks.
+- **Real Network Auto-Reconnect**
+  Listens for network connectivity transitions via `ConnectivityManager.NetworkCallback` and automatically resumes active sessions.
+- **Android 13+ Material You Monochrome Adaptive Icon**
+  Features a native vector monochrome icon (`ic_launcher_monochrome`) that adapts to user wallpaper themes on modern Android devices.
 
 ---
 
@@ -73,27 +91,30 @@ Antigravity Pulse follows a clean **MVVM** architecture written 100% in Kotlin:
 
 | Layer | Technologies |
 | --- | --- |
-| **UI & Styling** | Jetpack Compose, Material Design 3, Edge-to-Edge WindowInsets, Adaptive Navigation (Bar / Rail) |
+| **UI & Styling** | Jetpack Compose, Material Design 3, Edge-to-Edge WindowInsets, Adaptive Navigation (Bar / Rail), Android 13+ Material You Monochrome Adaptive Icon, Memoized Styles & Layouts |
 | **State & Concurrency** | ViewModel, Kotlin Coroutines, `StateFlow`, `collectAsStateWithLifecycle` |
-| **Local Storage** | Room Database (SQLite) + SharedPreferences for instant appearance & handle state |
-| **Cloud Sync & Auth** | Firebase Authentication (Jetpack Credential Manager Google Sign-In), Cloud Firestore, Firebase App Check |
-| **QR Scanning** | AndroidX CameraX + Google ML Kit Barcode Scanning |
-| **Networking & Bridge** | OkHttp, Android WebView with custom `WebChromeClient` (`ACTION_OPEN_DOCUMENT`) & `WebViewClient` scheme guard |
-| **Security** | AndroidX BiometricPrompt, HTTPS/HTTP URL scheme enforcement, zero broad storage permissions |
+| **Local Storage** | Room v4 Database (SQLite with non-destructive migrations `MIGRATION_2_3` & `MIGRATION_3_4`) + SharedPreferences for instant appearance & handle state |
+| **Cloud Sync & Auth** | Firebase Authentication (Jetpack Credential Manager Google Sign-In), Cloud Firestore (`serverProfiles` & `copilotPrompts`), Firebase App Check |
+| **QR Scanning** | AndroidX CameraX + Google ML Kit Barcode Scanning with strict scheme sanitization & clean lifecycle disposal |
+| **Networking & Bridge** | Android WebView with custom `WebChromeClient` (`ACTION_OPEN_DOCUMENT`), `WebViewClient` scheme guard, native `ConnectivityManager.NetworkCallback` auto-reconnect |
+| **Security** | AndroidX BiometricPrompt with smart 60-second background re-lock, `FLAG_SECURE`, strict URL/QR scheme guard (blocks `javascript:`, `file:`, `content:`, `data:`, `intent:`), geolocation disabled, zero broad storage permissions |
 | **Testing** | JUnit 4, Robolectric, Compose UI Test (`createComposeRule`) |
 
 ### Project Structure
 ```text
-├── .github/ISSUE_TEMPLATE/    # Bug report & feature request templates
+├── .github/
+│   ├── ISSUE_TEMPLATE/        # Bug report & feature request templates
+│   └── workflows/             # Automated APK release CI/CD workflow (release-apk.yml)
 ├── app/src/main/java/com/example/
 │   ├── MainActivity.kt        # Root activity, biometric gate, file picker & fullscreen scaffold
 │   ├── data/
 │   │   ├── cloud/             # Firebase Firestore sync & Google Sign-In repository
-│   │   ├── local/             # Room entities, DAO, and database singleton
-│   │   └── remote/            # RAM-pinned WebView manager & bridge client
+│   │   ├── local/             # Room v4 entities, DAO, and database singleton with migrations
+│   │   └── remote/            # Dual RAM-pinned WebView managers (Remote & AI Studio) & bridge client
+│   ├── notifications/         # Native Android notification channels & PWA alerts bridge
 │   ├── ui/
 │   │   ├── components/        # Movable translucent frosted-glass side handle & control panel
-│   │   ├── screens/           # Remote bridge, QR scanner, Cloud Sync, Appearance & Developer Settings
+│   │   ├── screens/           # Remote bridge, AI Studio Web, QR scanner, Cloud Sync & Settings
 │   │   └── theme/             # Material You dynamic theme, Frosted Glass modifier, 12 dark presets & persistence
 │   └── viewmodel/             # Reactive state management
 ├── app/src/test/              # Robolectric & Compose UI unit tests
@@ -108,7 +129,7 @@ Antigravity Pulse follows a clean **MVVM** architecture written 100% in Kotlin:
 ### Prerequisites
 - **JDK 17** or higher
 - **Android SDK** (Compile SDK 36, Min SDK 24)
-- **Gradle 9.3.1** (or Android Studio Ladybug / Meerkat+)
+- **Gradle 9.3.1** (or `./gradlew`)
 
 ### 1. Clone the Repository
 ```bash
@@ -125,8 +146,8 @@ If you want to connect your own Firebase project for Cloud Sync, replace `app/go
 
 ### 3. Build the APK
 ```bash
-# Build a debug APK
-gradle :app:assembleDebug
+# Build an installable debug APK
+./gradlew :app:assembleDebug
 
 # Output location:
 # app/build/outputs/apk/debug/app-debug.apk
@@ -134,17 +155,16 @@ gradle :app:assembleDebug
 
 ### 4. Run Unit & UI Tests
 ```bash
-gradle :app:testDebugUnitTest
+./gradlew :app:testDebugUnitTest
 ```
 
 ---
 
-## Publishing Releases (100% Free — No GitHub Actions Required)
+## Publishing Releases & Automated CI/CD
 
-GitHub Releases binary hosting is **100% free** (up to 2 GB per file) and works on every GitHub account without GitHub Actions:
-1. Export or build the `.apk` file.
-2. Open your repository on GitHub → click **Releases** → **Create a new release**.
-3. Create tag `v1.0.0`, add release notes, and attach your `.apk` under **Attach binaries**.
+Antigravity Pulse includes an automated GitHub Actions release pipeline (`.github/workflows/release-apk.yml`):
+- **Automated Workflow**: Whenever a version tag like `v1.1.0` is pushed, GitHub Actions runs the full unit/Robolectric test suite, compiles an installable APK (`Antigravity-Pulse-v1.1.0.apk`), generates `SHA256SUMS.txt`, and publishes an official GitHub Release automatically with `RELEASE_NOTES.md`.
+- **Universal Installability**: When signing keystore secrets are configured in repository secrets, release builds are signed with the upload key; otherwise, the workflow signs using the project's existing debug keystore so Android phones and Obtainium can install the APK immediately.
 4. Click **Publish release** — Android users (and Obtainium) can immediately download and install the APK directly on their phones.
 
 ---
