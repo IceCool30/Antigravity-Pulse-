@@ -2,14 +2,20 @@ package com.example
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import android.webkit.MimeTypeMap
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -54,6 +60,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Fullscreen
@@ -117,10 +124,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.cloud.configureAppCheck
 import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
+import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.RetainedWebViewManager
 import com.example.notifications.PulseNotificationManager
 import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
+import com.example.ui.screens.AiStudioWebScreen
 import com.example.ui.screens.AppearanceSettingsSheet
 import com.example.ui.screens.QrPairingScannerDialog
 import com.example.ui.screens.RetainedWebViewBridgeScreen
@@ -134,6 +143,13 @@ import com.example.ui.theme.frostedGlass
 import com.example.viewmodel.AntigravityViewModel
 
 class MainActivity : FragmentActivity() {
+    companion object {
+        private const val BIOMETRIC_RELOCK_TIMEOUT_MS = 60_000L
+    }
+
+    private var backgroundedAtElapsedMs: Long = 0L
+    private var relockCallback: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -149,6 +165,15 @@ class MainActivity : FragmentActivity() {
             val appearance by appearanceManager.settings.collectAsStateWithLifecycle()
             var isBiometricUnlocked by rememberSaveable { mutableStateOf(!appearance.isBiometricLockEnabled) }
             var hasUnlockedOnce by rememberSaveable { mutableStateOf(!appearance.isBiometricLockEnabled) }
+
+            DisposableEffect(appearance.isBiometricLockEnabled) {
+                relockCallback = if (appearance.isBiometricLockEnabled) {
+                    { isBiometricUnlocked = false }
+                } else {
+                    null
+                }
+                onDispose { relockCallback = null }
+            }
 
             // Protect against screenshots, screen capture, and Recents thumbnail leaks when Biometric Lock is active
             LaunchedEffect(appearance.isBiometricLockEnabled) {
@@ -193,20 +218,32 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         PulseNotificationManager.isAppInForeground = true
+        if (backgroundedAtElapsedMs > 0L &&
+            (SystemClock.elapsedRealtime() - backgroundedAtElapsedMs) > BIOMETRIC_RELOCK_TIMEOUT_MS
+        ) {
+            relockCallback?.invoke()
+        }
+        backgroundedAtElapsedMs = 0L
         RetainedWebViewManager.keepTimersRunning()
+        AiStudioPinnedWebViewManager.keepTimersRunning()
     }
 
     override fun onPause() {
         PulseNotificationManager.isAppInForeground = false
         RetainedWebViewManager.flushCookies()
         RetainedWebViewManager.keepTimersRunning()
+        AiStudioPinnedWebViewManager.flushCookies()
+        AiStudioPinnedWebViewManager.keepTimersRunning()
         super.onPause()
     }
 
     override fun onStop() {
         PulseNotificationManager.isAppInForeground = false
+        backgroundedAtElapsedMs = SystemClock.elapsedRealtime()
         RetainedWebViewManager.flushCookies()
         RetainedWebViewManager.keepTimersRunning()
+        AiStudioPinnedWebViewManager.flushCookies()
+        AiStudioPinnedWebViewManager.keepTimersRunning()
         super.onStop()
     }
 }
@@ -387,6 +424,7 @@ private enum class PulseTab(
     val tag: String
 ) {
     WEB_BRIDGE(R.string.nav_bridge, Icons.Default.Language, "nav_tab_bridge"),
+    AI_STUDIO(R.string.nav_ai_studio, Icons.Default.AutoAwesome, "nav_tab_ai_studio"),
     STORAGE_SYNC(R.string.nav_sync, Icons.Default.CloudSync, "nav_tab_sync")
 }
 
@@ -407,6 +445,9 @@ fun AntigravityPulseApp(
     val serverProfiles by antigravityViewModel.serverProfiles.collectAsStateWithLifecycle()
     val telemetry by antigravityViewModel.bridgeTelemetry.collectAsStateWithLifecycle()
     val statusBanner by antigravityViewModel.statusBanner.collectAsStateWithLifecycle()
+    val remoteCanGoBack by RetainedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
+    val aiStudioCanGoBack by AiStudioPinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
+    val activeAiStudioSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(PulseTab.WEB_BRIDGE.ordinal) }
     var showAppearanceSheet by rememberSaveable { mutableStateOf(false) }
@@ -559,9 +600,59 @@ fun AntigravityPulseApp(
         }
     }
 
-    // Keep auto-reconnect policy synced with persisted settings
+    // Keep auto-reconnect policy synced with persisted settings and recover pinned WebViews on Wi-Fi/5G restore
     LaunchedEffect(appearance.isAutoReconnectEnabled) {
         antigravityViewModel.setAutoReconnectEnabled(appearance.isAutoReconnectEnabled)
+    }
+
+    DisposableEffect(appearance.isAutoReconnectEnabled) {
+        if (!appearance.isAutoReconnectEnabled) {
+            onDispose {}
+        } else {
+            val connectivityManager = context.applicationContext
+                .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val hadNetworkDrop = AtomicBoolean(false)
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onLost(network: Network) {
+                    hadNetworkDrop.set(true)
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    networkCapabilities: NetworkCapabilities
+                ) {
+                    val hasValidatedInternet =
+                        networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                            networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    if (hasValidatedInternet && hadNetworkDrop.compareAndSet(true, false)) {
+                        var refreshed = false
+                        if (RetainedWebViewManager.hasActiveLoadedSession()) {
+                            RetainedWebViewManager.reloadCurrentPage()
+                            refreshed = true
+                        }
+                        if (AiStudioPinnedWebViewManager.isPinnedInRam()) {
+                            AiStudioPinnedWebViewManager.reloadCurrentPage()
+                            refreshed = true
+                        }
+                        if (refreshed) {
+                            antigravityViewModel.recordWebViewBridgeEvent(
+                                "Network recovered — refreshed active session"
+                            )
+                        }
+                    }
+                }
+            }
+            try {
+                connectivityManager?.registerDefaultNetworkCallback(callback)
+            } catch (_: Exception) {
+            }
+            onDispose {
+                try {
+                    connectivityManager?.unregisterNetworkCallback(callback)
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     // Sync active endpoint URL to synchronous SharedPreferences for instant restore after unlock/restart
@@ -583,13 +674,18 @@ fun AntigravityPulseApp(
 
     val isBarsHidden = appearance.isFullscreenBarsHidden
 
-    // Smart Back navigation: close floating panel -> return to Remote tab -> go back inside WebView
+    // Smart Back navigation: close floating panel -> go back in AI Studio Web -> return to Remote -> go back in Remote
+    val isAiStudioWebBackActive = selectedTabIndex == PulseTab.AI_STUDIO.ordinal && aiStudioCanGoBack
     BackHandler(
         enabled = !showAppearanceSheet &&
-            (showFloatingQuickMenu || selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal || RetainedWebViewManager.canGoBack())
+            (showFloatingQuickMenu ||
+                selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal ||
+                remoteCanGoBack ||
+                isAiStudioWebBackActive)
     ) {
         when {
             showFloatingQuickMenu -> showFloatingQuickMenu = false
+            isAiStudioWebBackActive -> AiStudioPinnedWebViewManager.goBack()
             selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal -> selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
             else -> RetainedWebViewManager.goBack()
         }
@@ -876,6 +972,15 @@ fun AntigravityPulseApp(
                                     }
                                 )
 
+                                PulseTab.AI_STUDIO -> AiStudioWebScreen(
+                                    domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                    isFullscreenBarsHidden = isBarsHidden,
+                                    onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                    onStatusEvent = { eventMsg ->
+                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                    }
+                                )
+
                                 PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
                                     dao = dao,
                                     localProfiles = serverProfiles,
@@ -890,6 +995,7 @@ fun AntigravityPulseApp(
                                     onClearLocalData = {
                                         onUpdateAppearance { it.copy(lastActiveRemoteUrl = "") }
                                         RetainedWebViewManager.clearSensitiveBrowsingData()
+                                        AiStudioPinnedWebViewManager.clearSensitiveBrowsingData()
                                         antigravityViewModel.clearAllLocalWorkspaceData()
                                     }
                                 )
@@ -899,6 +1005,7 @@ fun AntigravityPulseApp(
 
                     // Compact Translucent Movable Side Panel (Active by default in Fullscreen Mode)
                     if (isBarsHidden) {
+                        val isOnAiStudio = selectedTabIndex == PulseTab.AI_STUDIO.ordinal
                         MovableFloatingControlPanel(
                             isExpanded = showFloatingQuickMenu,
                             xFraction = appearance.floatingHandleXFraction,
@@ -906,6 +1013,9 @@ fun AntigravityPulseApp(
                             tabs = panelTabs,
                             selectedTabIndex = selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex),
                             activeHostLabel = activeProfile?.name ?: "Connect Remote URL",
+                            isAiStudioActive = isOnAiStudio,
+                            activeAiStudioSection = activeAiStudioSection,
+                            domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
                             surface = surface,
                             elevated = elevated,
                             border = border,
@@ -922,11 +1032,33 @@ fun AntigravityPulseApp(
                                 }
                             },
                             onSelectTab = { index -> selectedTabIndex = index },
+                            onSelectAiStudioSection = { section ->
+                                AiStudioPinnedWebViewManager.navigateToSection(section)
+                            },
+                            onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                            onOpenAiStudioExternal = {
+                                try {
+                                    val url = AiStudioPinnedWebViewManager.currentUrl()
+                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                    } else {
+                                        antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
+                                    }
+                                } catch (_: Exception) {
+                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
+                                }
+                            },
                             onOpenHostSwitcher = { showServerModal = true },
                             onOpenQrScanner = { showGlobalQrScanner = true },
+                            reloadActionLabel = if (isOnAiStudio) "Reload AI Studio" else "Reload Remote",
                             onReloadWeb = {
-                                RetainedWebViewManager.reloadCurrentPage()
-                                antigravityViewModel.recordWebViewBridgeEvent("Reloading Antigravity Remote...")
+                                if (isOnAiStudio) {
+                                    AiStudioPinnedWebViewManager.reloadCurrentPage()
+                                    antigravityViewModel.recordWebViewBridgeEvent("Reloading AI Studio...")
+                                } else {
+                                    RetainedWebViewManager.reloadCurrentPage()
+                                    antigravityViewModel.recordWebViewBridgeEvent("Reloading Antigravity Remote...")
+                                }
                             },
                             onShowBars = {
                                 onUpdateAppearance { it.copy(isFullscreenBarsHidden = false) }
@@ -1193,7 +1325,11 @@ private fun AntigravityRemoteTopBar(
                             Color(0xFF34A853)
                         )
                     ),
-                    style = Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    style = Stroke(
+                        width = 2.4.dp.toPx(),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
                 )
             }
 
@@ -1297,7 +1433,7 @@ private fun AntigravityRemoteTopBar(
             IconButton(
                 onClick = onOpenQrScanner,
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(48.dp)
                     .testTag("top_qr_scan_button")
             ) {
                 Icon(
@@ -1311,7 +1447,7 @@ private fun AntigravityRemoteTopBar(
             IconButton(
                 onClick = onOpenAppearance,
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(48.dp)
                     .testTag("top_appearance_settings_button")
             ) {
                 Icon(
@@ -1325,7 +1461,7 @@ private fun AntigravityRemoteTopBar(
             IconButton(
                 onClick = onHideBarsFullscreen,
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(48.dp)
                     .testTag("top_hide_bars_fullscreen_button")
             ) {
                 Icon(

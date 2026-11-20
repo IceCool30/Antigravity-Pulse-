@@ -127,11 +127,9 @@ data class AppearanceSettings(
     val foregroundHex: String = "#FFFFFF",
     val accentHex: String = "#FFC799",
     val isFullscreenBarsHidden: Boolean = true,
-    val showStartupGuideOnLaunch: Boolean = false,
     val isBiometricLockEnabled: Boolean = false,
     val isApprovalNotificationsEnabled: Boolean = true,
     val isAutoReconnectEnabled: Boolean = true,
-    val savedTerminalMacros: List<String> = emptyList(),
     val floatingHandleXFraction: Float = 0f,
     val floatingHandleYFraction: Float = 0.42f,
     val lastActiveRemoteUrl: String = "",
@@ -223,12 +221,6 @@ class AppearancePreferencesManager(context: Context) {
     private fun loadFromPrefs(): AppearanceSettings {
         val themeStr = prefs.getString("theme_mode", AntigravityThemeMode.DARK.name)
         val contrastStr = prefs.getString("contrast_mode", AntigravityContrastMode.STRONG.name)
-        val rawMacros = prefs.getString("saved_terminal_macros", "").orEmpty()
-        val parsedMacros = if (rawMacros.isBlank()) {
-            emptyList()
-        } else {
-            rawMacros.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        }
         return AppearanceSettings(
             themeMode = AntigravityThemeMode.entries.firstOrNull { it.name == themeStr }
                 ?: AntigravityThemeMode.DARK,
@@ -241,11 +233,9 @@ class AppearancePreferencesManager(context: Context) {
             foregroundHex = prefs.getString("fg_hex", "#FFFFFF") ?: "#FFFFFF",
             accentHex = prefs.getString("accent_hex", "#FFC799") ?: "#FFC799",
             isFullscreenBarsHidden = prefs.getBoolean("fullscreen_bars_hidden_v2", true),
-            showStartupGuideOnLaunch = prefs.getBoolean("show_startup_guide_on_launch_v2", false),
             isBiometricLockEnabled = prefs.getBoolean("biometric_lock_enabled", false),
             isApprovalNotificationsEnabled = prefs.getBoolean("approval_notifications_enabled", true),
             isAutoReconnectEnabled = prefs.getBoolean("auto_reconnect_enabled", true),
-            savedTerminalMacros = parsedMacros,
             floatingHandleXFraction = prefs.getFloat("floating_handle_x_fraction", 0f).coerceIn(0f, 1f),
             floatingHandleYFraction = prefs.getFloat("floating_handle_y_fraction", 0.42f).coerceIn(0f, 1f),
             lastActiveRemoteUrl = prefs.getString("last_active_remote_url", "") ?: "",
@@ -269,11 +259,9 @@ class AppearancePreferencesManager(context: Context) {
             .putString("fg_hex", next.foregroundHex)
             .putString("accent_hex", next.accentHex)
             .putBoolean("fullscreen_bars_hidden_v2", next.isFullscreenBarsHidden)
-            .putBoolean("show_startup_guide_on_launch_v2", next.showStartupGuideOnLaunch)
             .putBoolean("biometric_lock_enabled", next.isBiometricLockEnabled)
             .putBoolean("approval_notifications_enabled", next.isApprovalNotificationsEnabled)
             .putBoolean("auto_reconnect_enabled", next.isAutoReconnectEnabled)
-            .putString("saved_terminal_macros", next.savedTerminalMacros.joinToString("\n"))
             .putFloat("floating_handle_x_fraction", next.floatingHandleXFraction.coerceIn(0f, 1f))
             .putFloat("floating_handle_y_fraction", next.floatingHandleYFraction.coerceIn(0f, 1f))
             .putString("last_active_remote_url", next.lastActiveRemoteUrl)

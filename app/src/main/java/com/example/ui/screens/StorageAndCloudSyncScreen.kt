@@ -141,7 +141,7 @@ fun StorageAndCloudSyncScreen(
             },
             text = {
                 Text(
-                    text = "This removes all locally saved Remote host URLs and Copilot history from this phone. Your Google Cloud backups remain untouched.",
+                    text = "This removes all locally saved Remote host URLs and WebView browsing cache from this phone. Your Google Cloud backups remain untouched.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = secondaryFg
                 )
@@ -554,7 +554,7 @@ private fun AuthenticatedCloudSyncPanel(
                             modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Sign Out")
+                        Text(stringResource(id = R.string.sign_out))
                     }
                 }
 
@@ -855,13 +855,13 @@ private fun AuthenticatedCloudSyncPanel(
                                         )
                                         IconButton(
                                             onClick = { cloudViewModel.deleteCloudPrompt(snippet.id) },
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(48.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.DeleteOutline,
                                                 contentDescription = "Delete Prompt",
                                                 tint = CrimsonError,
-                                                modifier = Modifier.size(18.dp)
+                                                modifier = Modifier.size(20.dp)
                                             )
                                         }
                                     }
@@ -891,7 +891,7 @@ private fun AuthenticatedCloudSyncPanel(
                                                 modifier = Modifier.size(14.dp)
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Insert into Remote", fontWeight = FontWeight.Bold)
+                                            Text(stringResource(id = R.string.send_to_agent), fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }

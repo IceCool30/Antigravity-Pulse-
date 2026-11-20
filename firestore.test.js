@@ -200,3 +200,24 @@ test("Cross-user isolation: Bob cannot read, list, update, or delete Alice's pro
     bobDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_1").delete()
   );
 });
+
+test("Retired aiStudioPresets collection is strictly denied by global default-deny rules", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const created = new Date(Date.now() - 10000);
+
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("aiStudioPresets").get()
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("aiStudioPresets").doc("preset_1").set({
+      userId: ALICE_UID,
+      title: "Retired Preset",
+      systemInstruction: "",
+      starterPrompt: "Hello",
+      modelId: "gemini-3.8-flash",
+      temperature: 1.0,
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+});

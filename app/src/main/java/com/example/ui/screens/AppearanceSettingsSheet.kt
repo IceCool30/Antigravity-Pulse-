@@ -680,14 +680,14 @@ fun AppearanceSettingsSheet(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "Auto-Reconnect & Offline Queue",
+                                    text = "Auto-Reconnect on Network Recovery",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = fg
                                 )
                             }
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Automatically reconnect (2s→30s backoff) & flush queued commands on Wi-Fi/5G switches",
+                                text = "Automatically refresh active Remote & AI Studio sessions when Wi-Fi or 5G reconnects after a drop",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = secondaryFg
                             )
@@ -942,14 +942,14 @@ fun AppearanceSettingsSheet(
                             IconButton(
                                 onClick = onResetPreset,
                                 modifier = Modifier
-                                    .size(36.dp)
+                                    .size(48.dp)
                                     .testTag("reset_preset_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Replay,
                                     contentDescription = "Reset Preset Colors",
                                     tint = secondaryFg,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
 
@@ -1290,7 +1290,7 @@ fun AppearanceSettingsSheet(
         }
     }
 
-    // Modal 1: Full-Height Radio-Button Preset Picker matching Screenshot 4 (`Screenshot_20261118-112636_62bed107.jpg`)
+    // Modal 1: High-Contrast Themed Preset Picker with Live Color Swatches
     if (showPresetPickerDialog) {
         Dialog(
             onDismissRequest = { showPresetPickerDialog = false },
@@ -1299,27 +1299,37 @@ fun AppearanceSettingsSheet(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.65f))
+                    .background(Color.Black.copy(alpha = 0.72f))
                     .clickable { showPresetPickerDialog = false }
                     .padding(horizontal = 20.dp, vertical = 32.dp),
                 contentAlignment = Alignment.Center
             ) {
+                val pickerShape = RoundedCornerShape(22.dp)
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF3C3C3C))
-                        .border(1.dp, Color(0xFF565656), RoundedCornerShape(8.dp))
+                        .frostedGlass(
+                            shape = pickerShape,
+                            baseColor = surface,
+                            tintColor = accent,
+                            borderColor = border,
+                            enabled = isFrostedGlass,
+                            fillAlpha = 0.92f,
+                            tintAlpha = 0.08f,
+                            borderAlpha = 0.65f
+                        )
                         .testTag("preset_radio_list")
                 ) {
                     items(OfficialAntigravityPresets) { preset ->
                         val isSelected = preset.name == settings.presetName
+                        val presetBgColor = parseHexColor(preset.backgroundHex, Color.Black)
+                        val presetAccentColor = parseHexColor(preset.accentHex, accent)
                         Column {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(
-                                        if (isSelected) Color.White.copy(alpha = 0.08f)
+                                        if (isSelected) accent.copy(alpha = 0.14f)
                                         else Color.Transparent
                                     )
                                     .clickable {
@@ -1331,12 +1341,24 @@ fun AppearanceSettingsSheet(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = preset.name,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Normal,
-                                    color = Color.White
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(presetBgColor)
+                                            .border(2.dp, presetAccentColor, CircleShape)
+                                    )
+                                    Text(
+                                        text = preset.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) accent else fg
+                                    )
+                                }
                                 RadioButton(
                                     selected = isSelected,
                                     onClick = {
@@ -1344,13 +1366,13 @@ fun AppearanceSettingsSheet(
                                         showPresetPickerDialog = false
                                     },
                                     colors = RadioButtonDefaults.colors(
-                                        selectedColor = Color(0xFF7CE8FF),
-                                        unselectedColor = Color(0xFFB0B0B0)
+                                        selectedColor = accent,
+                                        unselectedColor = secondaryFg
                                     )
                                 )
                             }
                             HorizontalDivider(
-                                color = Color(0xFF2B2B2B),
+                                color = border.copy(alpha = 0.55f),
                                 thickness = 1.dp
                             )
                         }

@@ -10,6 +10,7 @@ import com.example.data.cloud.CloudServerProfile
 import com.example.data.cloud.CloudSyncRepository
 import com.example.data.local.AntigravityDao
 import com.example.data.local.ServerProfileEntity
+import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.BridgeConnectionState
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
@@ -125,13 +126,14 @@ class AntigravityViewModel(
     fun toggleDomLagBooster(enabled: Boolean) {
         _bridgeTelemetry.value = _bridgeTelemetry.value.copy(
             domLagBoosterEnabled = enabled,
-            lastBridgeEvent = if (enabled) "DOM Lag Booster ON" else "DOM Lag Booster OFF"
+            lastBridgeEvent = if (enabled) "DOM Lag Booster ON (Remote + AI Studio)" else "DOM Lag Booster OFF"
         )
         if (enabled) {
             RetainedWebViewManager.injectDomLagOptimizer()
         } else {
             RetainedWebViewManager.removeDomLagOptimizer()
         }
+        AiStudioPinnedWebViewManager.applyLagBooster(enabled)
     }
 
     fun setAutoReconnectEnabled(enabled: Boolean) {
@@ -148,11 +150,6 @@ class AntigravityViewModel(
     fun clearAllLocalWorkspaceData() {
         viewModelScope.launch {
             dao.clearAllServerProfiles()
-            dao.clearAllAgentSessions()
-            dao.clearAllSessionMessages()
-            dao.clearAllFileDiffs()
-            dao.clearAllTerminalLogs()
-            dao.clearCopilotMessages()
             _bridgeTelemetry.value = BridgeTelemetry(
                 domLagBoosterEnabled = _bridgeTelemetry.value.domLagBoosterEnabled,
                 autoReconnectEnabled = _bridgeTelemetry.value.autoReconnectEnabled

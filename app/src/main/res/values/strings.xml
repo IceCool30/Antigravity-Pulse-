@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">Antigravity Pulse</string>
     <string name="nav_bridge">Remote</string>
+    <string name="nav_ai_studio">AI Studio</string>
     <string name="nav_sync">Cloud Sync</string>
     <string name="sign_in_with_google">Sign in with Google</string>
     <string name="sign_out">Sign Out</string>

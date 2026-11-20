@@ -1,7 +1,6 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -22,10 +21,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DragIndicator
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -60,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.example.data.remote.AiStudioWebSection
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
@@ -78,6 +83,8 @@ data class FloatingPanelTabItem(
  * - Docked to left/right edge: sleek sidebar-tab shape.
  * - Moved anywhere else on screen: compact rounded floating pill.
  * - Position persists as normalized fractions [0f..1f] across restarts.
+ * - Context-aware: when on the AI Studio tab, puts Prompts, Build Apps, Library,
+ *   Lag Booster, Reload, and Open in Browser one tap away without cluttering fullscreen.
  */
 @Composable
 fun MovableFloatingControlPanel(
@@ -87,6 +94,9 @@ fun MovableFloatingControlPanel(
     tabs: List<FloatingPanelTabItem>,
     selectedTabIndex: Int,
     activeHostLabel: String,
+    isAiStudioActive: Boolean = false,
+    activeAiStudioSection: AiStudioWebSection = AiStudioWebSection.NEW_CHAT,
+    domLagBoosterEnabled: Boolean = true,
     surface: Color,
     elevated: Color,
     border: Color,
@@ -96,11 +106,15 @@ fun MovableFloatingControlPanel(
     onExpandedChange: (Boolean) -> Unit,
     onPersistPositionFraction: (Float, Float) -> Unit,
     onSelectTab: (Int) -> Unit,
+    onSelectAiStudioSection: (AiStudioWebSection) -> Unit = {},
+    onToggleDomBooster: (Boolean) -> Unit = {},
+    onOpenAiStudioExternal: () -> Unit = {},
     onOpenHostSwitcher: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onReloadWeb: () -> Unit,
     onShowBars: () -> Unit,
     onOpenSettings: () -> Unit,
+    reloadActionLabel: String = "Reload Remote",
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(
@@ -122,8 +136,8 @@ fun MovableFloatingControlPanel(
         var panelSize by remember {
             mutableStateOf(
                 IntSize(
-                    with(density) { 188.dp.toPx() }.roundToInt(),
-                    with(density) { 360.dp.toPx() }.roundToInt()
+                    with(density) { 196.dp.toPx() }.roundToInt(),
+                    with(density) { 380.dp.toPx() }.roundToInt()
                 )
             )
         }
@@ -244,7 +258,7 @@ fun MovableFloatingControlPanel(
                         )
                     }
                     .onSizeChanged { panelSize = it }
-                    .width(192.dp)
+                    .width(200.dp)
                     .heightIn(max = (maxHeight - 24.dp).coerceAtLeast(220.dp))
                     .shadow(14.dp, panelShape, ambientColor = Color.Black.copy(alpha = 0.45f))
                     .frostedGlass(
@@ -292,7 +306,7 @@ fun MovableFloatingControlPanel(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "Controls",
+                            text = if (isAiStudioActive) "AI Studio" else "Controls",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = fg,
@@ -317,7 +331,7 @@ fun MovableFloatingControlPanel(
 
                 HorizontalDivider(color = border.copy(alpha = 0.6f))
 
-                // Compact Control Actions
+                // Compact Context-Aware Control Actions
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -325,51 +339,147 @@ fun MovableFloatingControlPanel(
                         .padding(8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    PanelActionButton(
-                        label = activeHostLabel.ifBlank { "Connect Remote" },
-                        icon = Icons.Default.Link,
-                        iconTint = EmeraldOnline,
-                        textColor = fg,
-                        containerColor = elevated.copy(alpha = 0.72f),
-                        testTag = "floating_quick_connect_host",
-                        onClick = {
-                            onExpandedChange(false)
-                            onOpenHostSwitcher()
-                        }
-                    )
+                    if (isAiStudioActive) {
+                        // Distraction-free fullscreen AI Studio quick jumps
+                        PanelActionButton(
+                            label = "Prompts",
+                            icon = Icons.AutoMirrored.Filled.Chat,
+                            iconTint = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) accent else secondaryFg,
+                            textColor = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) accent else fg,
+                            containerColor = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) {
+                                accent.copy(alpha = 0.16f)
+                            } else {
+                                elevated.copy(alpha = 0.72f)
+                            },
+                            testTag = "floating_ai_studio_prompts",
+                            onClick = {
+                                onSelectAiStudioSection(AiStudioWebSection.NEW_CHAT)
+                                onExpandedChange(false)
+                            }
+                        )
 
-                    PanelActionButton(
-                        label = "Scan QR Code",
-                        icon = Icons.Default.QrCodeScanner,
-                        iconTint = accent,
-                        textColor = fg,
-                        containerColor = elevated.copy(alpha = 0.72f),
-                        testTag = "floating_quick_scan_qr",
-                        onClick = {
-                            onExpandedChange(false)
-                            onOpenQrScanner()
-                        }
-                    )
+                        PanelActionButton(
+                            label = "Build Apps",
+                            icon = Icons.Default.Code,
+                            iconTint = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) accent else secondaryFg,
+                            textColor = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) accent else fg,
+                            containerColor = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) {
+                                accent.copy(alpha = 0.16f)
+                            } else {
+                                elevated.copy(alpha = 0.72f)
+                            },
+                            testTag = "floating_ai_studio_build_apps",
+                            onClick = {
+                                onSelectAiStudioSection(AiStudioWebSection.BUILD_APPS)
+                                onExpandedChange(false)
+                            }
+                        )
 
-                    PanelActionButton(
-                        label = "Reload Remote",
-                        icon = Icons.Default.Refresh,
-                        iconTint = secondaryFg,
-                        textColor = fg,
-                        containerColor = elevated.copy(alpha = 0.72f),
-                        testTag = "floating_quick_reload_web",
-                        onClick = {
-                            onExpandedChange(false)
-                            onReloadWeb()
-                        }
-                    )
+                        PanelActionButton(
+                            label = "Library",
+                            icon = Icons.Default.FolderOpen,
+                            iconTint = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) accent else secondaryFg,
+                            textColor = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) accent else fg,
+                            containerColor = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) {
+                                accent.copy(alpha = 0.16f)
+                            } else {
+                                elevated.copy(alpha = 0.72f)
+                            },
+                            testTag = "floating_ai_studio_library",
+                            onClick = {
+                                onSelectAiStudioSection(AiStudioWebSection.DRIVE_LIBRARY)
+                                onExpandedChange(false)
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
+                            icon = Icons.Default.Bolt,
+                            iconTint = if (domLagBoosterEnabled) EmeraldOnline else secondaryFg,
+                            textColor = if (domLagBoosterEnabled) EmeraldOnline else fg,
+                            containerColor = if (domLagBoosterEnabled) {
+                                EmeraldOnline.copy(alpha = 0.16f)
+                            } else {
+                                elevated.copy(alpha = 0.72f)
+                            },
+                            testTag = "floating_ai_studio_lag_booster",
+                            onClick = {
+                                onToggleDomBooster(!domLagBoosterEnabled)
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = reloadActionLabel,
+                            icon = Icons.Default.Refresh,
+                            iconTint = secondaryFg,
+                            textColor = fg,
+                            containerColor = elevated.copy(alpha = 0.72f),
+                            testTag = "floating_quick_reload_web",
+                            onClick = {
+                                onExpandedChange(false)
+                                onReloadWeb()
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = "Open in Browser",
+                            icon = Icons.AutoMirrored.Filled.OpenInNew,
+                            iconTint = accent,
+                            textColor = fg,
+                            containerColor = elevated.copy(alpha = 0.72f),
+                            testTag = "floating_ai_studio_open_browser",
+                            onClick = {
+                                onExpandedChange(false)
+                                onOpenAiStudioExternal()
+                            }
+                        )
+                    } else {
+                        PanelActionButton(
+                            label = activeHostLabel.ifBlank { "Connect Remote" },
+                            icon = Icons.Default.Link,
+                            iconTint = EmeraldOnline,
+                            textColor = fg,
+                            containerColor = elevated.copy(alpha = 0.72f),
+                            testTag = "floating_quick_connect_host",
+                            onClick = {
+                                onExpandedChange(false)
+                                onOpenHostSwitcher()
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = "Scan QR Code",
+                            icon = Icons.Default.QrCodeScanner,
+                            iconTint = accent,
+                            textColor = fg,
+                            containerColor = elevated.copy(alpha = 0.72f),
+                            testTag = "floating_quick_scan_qr",
+                            onClick = {
+                                onExpandedChange(false)
+                                onOpenQrScanner()
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = reloadActionLabel,
+                            icon = Icons.Default.Refresh,
+                            iconTint = secondaryFg,
+                            textColor = fg,
+                            containerColor = elevated.copy(alpha = 0.72f),
+                            testTag = "floating_quick_reload_web",
+                            onClick = {
+                                onExpandedChange(false)
+                                onReloadWeb()
+                            }
+                        )
+                    }
 
                     HorizontalDivider(
                         color = border.copy(alpha = 0.55f),
                         modifier = Modifier.padding(vertical = 2.dp)
                     )
 
-                    // 2 Main Tabs: Remote & Cloud Sync
+                    // Main Tabs: Remote, AI Studio & Cloud Sync
                     tabs.forEach { tab ->
                         val isSelected = selectedTabIndex == tab.index
                         PanelActionButton(

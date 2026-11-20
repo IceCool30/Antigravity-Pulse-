@@ -8,19 +8,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import com.example.data.local.AgentSessionEntity
 import com.example.data.local.AntigravityDatabase
-import com.example.data.local.FileDiffEntity
-import com.example.data.local.SessionMessageEntity
-import com.example.data.local.TerminalLogEntity
-import com.example.data.remote.AntigravityBridgeClient
-import com.example.data.remote.BridgeConnectionState
-import com.example.data.remote.BridgeTelemetry
+import com.example.data.local.ServerProfileEntity
 import com.example.data.remote.RetainedWebViewManager
 import com.example.notifications.PulseNotificationManager
 import com.example.ui.screens.parseAntigravityPairingPayload
@@ -69,126 +61,78 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `verify app name and clean database with zero dummy data`() = runBlocking {
+    fun `verify app name and clean Room v4 database with server profiles CRUD`() = runBlocking {
         val appName = context.getString(R.string.app_name)
         assertEquals("Antigravity Pulse", appName)
 
         val dao = database.dao()
         assertTrue(dao.getAllServerProfilesOnce().isEmpty())
-        assertTrue(dao.getAllSessionsOnce().isEmpty())
-        assertTrue(dao.observeAllSessionMessages().first().isEmpty())
-        assertTrue(dao.observeAllDiffs().first().isEmpty())
-        assertTrue(dao.observeAllTerminalLogs().first().isEmpty())
-        assertTrue(dao.observeCopilotMessages().first().isEmpty())
-    }
 
-    @Test
-    fun `stress test 500 rapid terminal logs and session messages in Room`() = runBlocking {
-        val dao = database.dao()
-        val sessionId = "stress_sess_1"
-        dao.upsertAgentSession(
-            AgentSessionEntity(
-                id = sessionId,
-                serverId = "srv_1",
-                workspaceName = "stress-workspace",
-                branchName = "main",
-                status = "ACTIVE",
-                lastSummary = "Stress testing 500 concurrent logs",
-                messageCount = 500,
-                updatedAtEpoch = System.currentTimeMillis()
-            )
+        val firstProfile = ServerProfileEntity(
+            id = "srv_workstation",
+            name = "Workstation Pro",
+            endpointUrl = "https://workstation.tailnet.ts.net:8443",
+            connectionMode = "DIRECT_TUNNEL",
+            authToken = "",
+            keepAlivePinned = true,
+            lastLatencyMs = 24,
+            isSelected = false,
+            updatedAtEpoch = 1_000L
         )
+        val secondProfile = ServerProfileEntity(
+            id = "srv_lab",
+            name = "Home Lab",
+            endpointUrl = "https://192.168.1.50:8443",
+            connectionMode = "HYBRID_BRIDGE",
+            authToken = "tok_lab",
+            keepAlivePinned = true,
+            lastLatencyMs = 8,
+            isSelected = false,
+            updatedAtEpoch = 2_000L
+        )
+        dao.upsertServerProfiles(listOf(firstProfile, secondProfile))
 
-        // Rapid burst of 500 terminal logs and 200 session messages
-        for (i in 1..500) {
-            dao.insertTerminalLog(
-                TerminalLogEntity(
-                    id = "stress_term_$i",
-                    sessionId = sessionId,
-                    command = "echo 'stress-line-$i'",
-                    output = "stress-line-$i\nexit 0",
-                    exitCode = if (i % 25 == 0) 1 else 0,
-                    durationMs = i % 15,
-                    timestampEpoch = 1_000_000L + i
-                )
-            )
-        }
+        // Before selection, newest updatedAtEpoch comes first
+        val initialOrdered = dao.observeServerProfiles().first()
+        assertEquals(2, initialOrdered.size)
+        assertEquals("srv_lab", initialOrdered[0].id)
 
-        for (j in 1..200) {
-            dao.insertSessionMessage(
-                SessionMessageEntity(
-                    id = "stress_msg_$j",
-                    sessionId = sessionId,
-                    senderRole = if (j % 2 == 0) "AGENT" else "USER",
-                    content = "High frequency message frame #$j",
-                    timestampEpoch = 2_000_000L + j
-                )
-            )
-        }
+        // Selecting firstProfile moves it to index 0
+        dao.selectServerProfile("srv_workstation")
+        val afterSelect = dao.observeServerProfiles().first()
+        assertEquals("srv_workstation", afterSelect[0].id)
+        assertTrue(afterSelect[0].isSelected)
+        assertFalse(afterSelect[1].isSelected)
 
-        for (k in 1..50) {
-            dao.upsertFileDiffs(
-                listOf(
-                    FileDiffEntity(
-                        id = "stress_diff_$k",
-                        sessionId = sessionId,
-                        filePath = "app/src/main/java/com/example/File$k.kt",
-                        language = "kotlin",
-                        additions = 12,
-                        deletions = 3,
-                        unifiedPatch = "@@ -1,3 +1,12 @@\n+val x = $k",
-                        status = "MODIFIED"
-                    )
-                )
-            )
-        }
+        // Delete single profile and verify clearAll leaves 0 residual records
+        dao.deleteServerProfile("srv_lab")
+        assertEquals(1, dao.getAllServerProfilesOnce().size)
 
-        val logs = dao.observeAllTerminalLogs().first()
-        val messages = dao.observeAllSessionMessages().first()
-        val diffs = dao.observeAllDiffs().first()
-
-        assertEquals(500, logs.size)
-        assertEquals(200, messages.size)
-        assertEquals(50, diffs.size)
-
-        // Verify clear all operations leave 0 residual records
-        dao.clearAllTerminalLogs()
-        dao.clearAllSessionMessages()
-        dao.clearAllFileDiffs()
-        dao.clearAllAgentSessions()
-        assertTrue(dao.observeAllTerminalLogs().first().isEmpty())
-        assertTrue(dao.observeAllSessionMessages().first().isEmpty())
-        assertTrue(dao.observeAllDiffs().first().isEmpty())
-        assertTrue(dao.getAllSessionsOnce().isEmpty())
+        dao.clearAllServerProfiles()
+        assertTrue(dao.getAllServerProfilesOnce().isEmpty())
     }
 
     @Test
-    fun `security audit url scheme validation and bridge disconnected shell handling`() = runBlocking {
-        // Verify WebView URL scheme validator blocks file://, javascript:, content://, intent://
+    fun `security audit hardened URL scheme validator blocks dangerous schemes and malformed URIs`() {
         assertTrue(RetainedWebViewManager.isSafeHttpUrl("https://workstation.example.com:8443"))
-        assertTrue(RetainedWebViewManager.isSafeHttpUrl("http://192.168.1.50:8443"))
+        assertTrue(RetainedWebViewManager.isSafeHttpUrl("http://192.168.1.50:8443/remote?tab=1"))
+        assertTrue(RetainedWebViewManager.isSafeHttpUrl("https://aistudio.google.com/prompts/new_chat"))
+
+        // Block dangerous schemes
         assertFalse(RetainedWebViewManager.isSafeHttpUrl("file:///etc/passwd"))
         assertFalse(RetainedWebViewManager.isSafeHttpUrl("javascript:alert(1)"))
         assertFalse(RetainedWebViewManager.isSafeHttpUrl("content://com.example.provider/secret"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("data:text/html,<script>alert(1)</script>"))
         assertFalse(RetainedWebViewManager.isSafeHttpUrl("intent://scan/#Intent;end"))
+
+        // Block empty, scheme-only, whitespace/control chars, and oversized URLs
         assertFalse(RetainedWebViewManager.isSafeHttpUrl(""))
-
-        // Verify AntigravityBridgeClient starts DISCONNECTED and rejects invalid schemes
-        val bridge = AntigravityBridgeClient()
-        assertEquals(BridgeConnectionState.DISCONNECTED, bridge.telemetry.value.state)
-        assertEquals("", bridge.telemetry.value.activeEndpoint)
-
-        bridge.connectToEndpoint("javascript:evil()", "") {}
-        assertEquals(BridgeConnectionState.ERROR, bridge.telemetry.value.state)
-
-        // Reset to blank and verify executeShellCommandOverBridge returns exitCode 127 cleanly
-        bridge.connectToEndpoint("", "") {}
-        assertEquals(BridgeConnectionState.DISCONNECTED, bridge.telemetry.value.state)
-
-        val shellRes = bridge.executeShellCommandOverBridge("sess_1", "uname -a")
-        assertEquals("uname -a", shellRes.command)
-        assertEquals(127, shellRes.exitCode)
-        assertTrue(shellRes.output.contains("No remote host configured"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("https://"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("http://"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("https://example.com/bad path"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("https://example.com/\nheader"))
+        val oversizedUrl = "https://example.com/" + "a".repeat(2050)
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl(oversizedUrl))
     }
 
     @Test
@@ -221,7 +165,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `QR pairing payload parser handles JSON deep-link HTTPS and invalid payloads`() {
+    fun `QR pairing payload parser handles JSON deep-link HTTPS and blocks unsafe schemes`() {
         val jsonPayload = parseAntigravityPairingPayload(
             """{"name":"Workstation Pro","url":"https://dev.tailnet.ts.net:8443","token":"tok_abc123"}"""
         )
@@ -230,13 +174,20 @@ class ExampleRobolectricTest {
         assertEquals("https://dev.tailnet.ts.net:8443", jsonPayload.endpointUrl)
         assertEquals("tok_abc123", jsonPayload.authToken)
 
+        // wss:// and ws:// are safely normalized to https:// and http:// for WebView loading
         val deepLink = parseAntigravityPairingPayload(
             "antigravity://pair?url=wss%3A%2F%2F192.168.1.42%3A8443&token=secret99&name=LabBox"
         )
         assertNotNull(deepLink)
         assertEquals("LabBox", deepLink!!.hostName)
-        assertEquals("wss://192.168.1.42:8443", deepLink.endpointUrl)
+        assertEquals("https://192.168.1.42:8443", deepLink.endpointUrl)
         assertEquals("secret99", deepLink.authToken)
+
+        val wsJson = parseAntigravityPairingPayload(
+            """{"name":"Local Dev","url":"ws://10.0.0.12:3000"}"""
+        )
+        assertNotNull(wsJson)
+        assertEquals("http://10.0.0.12:3000", wsJson!!.endpointUrl)
 
         val directHttps = parseAntigravityPairingPayload(
             "https://my-host.example.com:8443/remote?token=xyz789"
@@ -245,57 +196,23 @@ class ExampleRobolectricTest {
         assertEquals("https://my-host.example.com:8443/remote?token=xyz789", directHttps!!.endpointUrl)
         assertEquals("xyz789", directHttps.authToken)
 
+        // Security audit: malicious QR payloads must be rejected at the QR boundary
+        assertNull(parseAntigravityPairingPayload("""{"name":"Evil","url":"javascript:alert(1)"}"""))
+        assertNull(parseAntigravityPairingPayload("antigravity://pair?url=file%3A%2F%2F%2Fetc%2Fpasswd"))
+        assertNull(parseAntigravityPairingPayload("antigravity://pair?url=data%3Atext%2Fhtml%2C%3Cscript%3E"))
+        assertNull(parseAntigravityPairingPayload("javascript:alert(1)"))
         assertNull(parseAntigravityPairingPayload("not a valid url"))
         assertNull(parseAntigravityPairingPayload(""))
     }
 
     @Test
-    fun `bridge offline queue exponential backoff and remote file JSON parser work reliably`() {
-        // Exponential backoff: 2s -> 4s -> 8s -> 16s -> 30s cap
-        assertEquals(2_000L, AntigravityBridgeClient.computeBackoffDelayMs(1))
-        assertEquals(4_000L, AntigravityBridgeClient.computeBackoffDelayMs(2))
-        assertEquals(8_000L, AntigravityBridgeClient.computeBackoffDelayMs(3))
-        assertEquals(16_000L, AntigravityBridgeClient.computeBackoffDelayMs(4))
-        assertEquals(30_000L, AntigravityBridgeClient.computeBackoffDelayMs(5))
-        assertEquals(30_000L, AntigravityBridgeClient.computeBackoffDelayMs(10))
-
-        // Offline JSON-RPC queue tracks queued commands when socket is disconnected
-        val bridge = AntigravityBridgeClient()
-        assertFalse(bridge.sendJsonRpcMessage("agent.sendPrompt", mapOf("prompt" to "hello")))
-        assertEquals(1, bridge.telemetry.value.queuedCommandsCount)
-        assertFalse(bridge.sendTerminalInterrupt("sess_1"))
-        assertEquals(2, bridge.telemetry.value.queuedCommandsCount)
-
-        bridge.setAutoReconnectEnabled(false)
-        assertFalse(bridge.telemetry.value.autoReconnectEnabled)
-        bridge.clearOfflineQueue()
-        assertEquals(0, bridge.telemetry.value.queuedCommandsCount)
-
-        // Remote file entries parser sorts directories first, then alphabetically
-        val json = """
-            {"result":{"entries":[
-              {"name":"README.md","path":"README.md","isDirectory":false,"sizeBytes":1024},
-              {"name":"src","path":"src","isDirectory":true},
-              {"name":"build.gradle.kts","path":"build.gradle.kts","isDirectory":false,"sizeBytes":2048}
-            ]}}
-        """.trimIndent()
-        val entries = AntigravityBridgeClient.parseRemoteFileEntriesJson(json, ".")
-        assertEquals(3, entries.size)
-        assertEquals("src", entries[0].name)
-        assertTrue(entries[0].isDirectory)
-        assertEquals("build.gradle.kts", entries[1].name)
-        assertEquals("README.md", entries[2].name)
-    }
-
-    @Test
-    fun `biometric lock approval notifications auto reconnect and terminal macros persist`() {
+    fun `biometric lock approval notifications and auto reconnect persist`() {
         val manager = AppearancePreferencesManager(context)
         manager.update {
             it.copy(
                 isBiometricLockEnabled = true,
                 isApprovalNotificationsEnabled = false,
-                isAutoReconnectEnabled = false,
-                savedTerminalMacros = listOf("git status --short", "gradle :app:testDebugUnitTest")
+                isAutoReconnectEnabled = false
             )
         }
 
@@ -304,19 +221,14 @@ class ExampleRobolectricTest {
         assertTrue(reloaded.isBiometricLockEnabled)
         assertFalse(reloaded.isApprovalNotificationsEnabled)
         assertFalse(reloaded.isAutoReconnectEnabled)
-        assertEquals(
-            listOf("git status --short", "gradle :app:testDebugUnitTest"),
-            reloaded.savedTerminalMacros
-        )
     }
 
     @Test
-    fun `app defaults to pure black OLED background fullscreen and developer profile persists`() {
+    fun `app defaults to pure black OLED background fullscreen and locked developer profile`() {
         val defaultSettings = AppearanceSettings()
         assertEquals("#000000", defaultSettings.backgroundHex)
         assertEquals("#000000", OfficialAntigravityPresets.first().backgroundHex)
         assertTrue(defaultSettings.isFullscreenBarsHidden)
-        assertFalse(defaultSettings.showStartupGuideOnLaunch)
         assertEquals(0f, defaultSettings.floatingHandleXFraction, 0.001f)
         assertEquals(0.42f, defaultSettings.floatingHandleYFraction, 0.001f)
         assertEquals("Solomon Ogar Bukie", defaultSettings.developerName)
@@ -497,5 +409,55 @@ class ExampleRobolectricTest {
         val reloaded = AppearancePreferencesManager(context).settings.value
         assertFalse(reloaded.isAppEventNotificationsEnabled)
         assertTrue(reloaded.isNotifyOnlyInBackground)
+    }
+
+    @Test
+    fun `Fullscreen AI Studio Web workspace hides toolbar cleanly and exposes Prompts, Build Apps, and Lag Booster`() {
+        var lagBoosterEnabled = true
+        val fullscreenState = androidx.compose.runtime.mutableStateOf(true)
+        val boosterState = androidx.compose.runtime.mutableStateOf(true)
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.screens.AiStudioWebScreen(
+                    domLagBoosterEnabled = boosterState.value,
+                    isFullscreenBarsHidden = fullscreenState.value,
+                    onToggleDomBooster = { enabled ->
+                        lagBoosterEnabled = enabled
+                        boosterState.value = enabled
+                    },
+                    onStatusEvent = {}
+                )
+            }
+        }
+
+        // 1. In Fullscreen Mode: pure edge-to-edge WebView with zero distracting toolbar
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("ai_studio_web_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ai_studio_pinned_webview_container").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ai_studio_collapsible_toolbar").assertDoesNotExist()
+        assertTrue(com.example.data.remote.AiStudioPinnedWebViewManager.isPinnedInRam())
+
+        // 2. When bars are shown: Prompts, Build Apps, Library, Lag Booster, and Pinned in RAM appear
+        composeTestRule.runOnIdle { fullscreenState.value = false }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("ai_studio_collapsible_toolbar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ai_studio_web_section_new_chat").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ai_studio_web_section_build_apps").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ai_studio_web_section_drive_library").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ai_studio_lag_booster_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("ai_studio_pinned_ram_badge").assertIsDisplayed()
+
+        // 3. Tapping Build Apps and toggling Lag Booster updates state cleanly
+        composeTestRule.onNodeWithTag("ai_studio_web_section_build_apps").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(
+            com.example.data.remote.AiStudioWebSection.BUILD_APPS,
+            com.example.data.remote.AiStudioPinnedWebViewManager.activeSectionState.value
+        )
+
+        composeTestRule.onNodeWithTag("ai_studio_lag_booster_toggle").performClick()
+        composeTestRule.waitForIdle()
+        assertFalse(lagBoosterEnabled)
     }
 }
