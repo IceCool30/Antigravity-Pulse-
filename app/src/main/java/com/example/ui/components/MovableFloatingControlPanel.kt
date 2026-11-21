@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -35,6 +36,8 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,6 +68,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.data.remote.AiStudioWebSection
+import com.example.data.remote.DevWebWorkspace
+import com.example.data.remote.WorkspaceShortcut
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
@@ -96,6 +101,9 @@ fun MovableFloatingControlPanel(
     activeHostLabel: String,
     isAiStudioActive: Boolean = false,
     activeAiStudioSection: AiStudioWebSection = AiStudioWebSection.NEW_CHAT,
+    activeDevWorkspace: DevWebWorkspace? = null,
+    activeDevShortcutId: String = "",
+    isDesktopModeEnabled: Boolean = false,
     domLagBoosterEnabled: Boolean = true,
     surface: Color,
     elevated: Color,
@@ -107,8 +115,11 @@ fun MovableFloatingControlPanel(
     onPersistPositionFraction: (Float, Float) -> Unit,
     onSelectTab: (Int) -> Unit,
     onSelectAiStudioSection: (AiStudioWebSection) -> Unit = {},
+    onSelectDevShortcut: (WorkspaceShortcut) -> Unit = {},
+    onToggleDesktopMode: (Boolean) -> Unit = {},
     onToggleDomBooster: (Boolean) -> Unit = {},
     onOpenAiStudioExternal: () -> Unit = {},
+    onOpenDevWorkspaceExternal: () -> Unit = {},
     onOpenHostSwitcher: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onReloadWeb: () -> Unit,
@@ -306,7 +317,11 @@ fun MovableFloatingControlPanel(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (isAiStudioActive) "AI Studio" else "Controls",
+                            text = when {
+                                isAiStudioActive -> "AI Studio"
+                                activeDevWorkspace != null -> activeDevWorkspace.displayName
+                                else -> "Controls"
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = fg,
@@ -431,6 +446,85 @@ fun MovableFloatingControlPanel(
                             onClick = {
                                 onExpandedChange(false)
                                 onOpenAiStudioExternal()
+                            }
+                        )
+                    } else if (activeDevWorkspace != null) {
+                        // Distraction-free fullscreen GitHub / Vercel / Supabase shortcuts & Desktop View
+                        activeDevWorkspace.shortcuts.forEach { shortcut ->
+                            val selected = activeDevShortcutId == shortcut.id
+                            PanelActionButton(
+                                label = shortcut.label,
+                                icon = Icons.Default.SubdirectoryArrowRight,
+                                iconTint = if (selected) accent else secondaryFg,
+                                textColor = if (selected) accent else fg,
+                                containerColor = if (selected) {
+                                    accent.copy(alpha = 0.16f)
+                                } else {
+                                    elevated.copy(alpha = 0.72f)
+                                },
+                                testTag = "floating_${activeDevWorkspace.id}_shortcut_${shortcut.id}",
+                                onClick = {
+                                    onSelectDevShortcut(shortcut)
+                                    onExpandedChange(false)
+                                }
+                            )
+                        }
+
+                        PanelActionButton(
+                            label = if (isDesktopModeEnabled) "Desktop View: ON" else "Desktop View: OFF",
+                            icon = if (isDesktopModeEnabled) Icons.Default.DesktopWindows else Icons.Default.Smartphone,
+                            iconTint = if (isDesktopModeEnabled) accent else secondaryFg,
+                            textColor = if (isDesktopModeEnabled) accent else fg,
+                            containerColor = if (isDesktopModeEnabled) {
+                                accent.copy(alpha = 0.16f)
+                            } else {
+                                elevated.copy(alpha = 0.72f)
+                            },
+                            testTag = "floating_dev_desktop_mode",
+                            onClick = {
+                                onToggleDesktopMode(!isDesktopModeEnabled)
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
+                            icon = Icons.Default.Bolt,
+                            iconTint = if (domLagBoosterEnabled) EmeraldOnline else secondaryFg,
+                            textColor = if (domLagBoosterEnabled) EmeraldOnline else fg,
+                            containerColor = if (domLagBoosterEnabled) {
+                                EmeraldOnline.copy(alpha = 0.16f)
+                            } else {
+                                elevated.copy(alpha = 0.72f)
+                            },
+                            testTag = "floating_dev_lag_booster",
+                            onClick = {
+                                onToggleDomBooster(!domLagBoosterEnabled)
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = reloadActionLabel,
+                            icon = Icons.Default.Refresh,
+                            iconTint = secondaryFg,
+                            textColor = fg,
+                            containerColor = elevated.copy(alpha = 0.72f),
+                            testTag = "floating_quick_reload_web",
+                            onClick = {
+                                onExpandedChange(false)
+                                onReloadWeb()
+                            }
+                        )
+
+                        PanelActionButton(
+                            label = "Open in Browser",
+                            icon = Icons.AutoMirrored.Filled.OpenInNew,
+                            iconTint = accent,
+                            textColor = fg,
+                            containerColor = elevated.copy(alpha = 0.72f),
+                            testTag = "floating_dev_open_browser",
+                            onClick = {
+                                onExpandedChange(false)
+                                onOpenDevWorkspaceExternal()
                             }
                         )
                     } else {

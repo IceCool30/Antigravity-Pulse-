@@ -133,7 +133,7 @@ data class AppearanceSettings(
     val floatingHandleXFraction: Float = 0f,
     val floatingHandleYFraction: Float = 0.42f,
     val lastActiveRemoteUrl: String = "",
-    val isMaterialYouDynamicEnabled: Boolean = true,
+    val isMaterialYouDynamicEnabled: Boolean = false,
     val isFrostedGlassEnabled: Boolean = true,
     val isAppEventNotificationsEnabled: Boolean = true,
     val isNotifyOnlyInBackground: Boolean = false
@@ -239,7 +239,7 @@ class AppearancePreferencesManager(context: Context) {
             floatingHandleXFraction = prefs.getFloat("floating_handle_x_fraction", 0f).coerceIn(0f, 1f),
             floatingHandleYFraction = prefs.getFloat("floating_handle_y_fraction", 0.42f).coerceIn(0f, 1f),
             lastActiveRemoteUrl = prefs.getString("last_active_remote_url", "") ?: "",
-            isMaterialYouDynamicEnabled = prefs.getBoolean("material_you_dynamic_enabled", true),
+            isMaterialYouDynamicEnabled = prefs.getBoolean("material_you_dynamic_enabled_v2", false),
             isFrostedGlassEnabled = prefs.getBoolean("frosted_glass_enabled", true),
             isAppEventNotificationsEnabled = prefs.getBoolean("app_event_notifications_enabled", true),
             isNotifyOnlyInBackground = prefs.getBoolean("notify_only_in_background", false)
@@ -265,7 +265,7 @@ class AppearancePreferencesManager(context: Context) {
             .putFloat("floating_handle_x_fraction", next.floatingHandleXFraction.coerceIn(0f, 1f))
             .putFloat("floating_handle_y_fraction", next.floatingHandleYFraction.coerceIn(0f, 1f))
             .putString("last_active_remote_url", next.lastActiveRemoteUrl)
-            .putBoolean("material_you_dynamic_enabled", next.isMaterialYouDynamicEnabled)
+            .putBoolean("material_you_dynamic_enabled_v2", next.isMaterialYouDynamicEnabled)
             .putBoolean("frosted_glass_enabled", next.isFrostedGlassEnabled)
             .putBoolean("app_event_notifications_enabled", next.isAppEventNotificationsEnabled)
             .putBoolean("notify_only_in_background", next.isNotifyOnlyInBackground)
@@ -279,6 +279,20 @@ class AppearancePreferencesManager(context: Context) {
                 backgroundHex = preset.backgroundHex,
                 foregroundHex = preset.foregroundHex,
                 accentHex = preset.accentHex,
+                isMaterialYouDynamicEnabled = false
+            )
+        }
+    }
+
+    fun resetToDefaultDark() {
+        val defaultDark = OfficialAntigravityPresets.first()
+        update {
+            it.copy(
+                themeMode = AntigravityThemeMode.DARK,
+                presetName = defaultDark.name,
+                backgroundHex = defaultDark.backgroundHex,
+                foregroundHex = defaultDark.foregroundHex,
+                accentHex = defaultDark.accentHex,
                 isMaterialYouDynamicEnabled = false
             )
         }

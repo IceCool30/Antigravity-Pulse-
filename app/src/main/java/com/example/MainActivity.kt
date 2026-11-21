@@ -53,7 +53,10 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -61,6 +64,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -69,13 +73,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -132,6 +139,8 @@ import com.example.data.cloud.configureAppCheck
 import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
 import com.example.data.remote.AiStudioPinnedWebViewManager
+import com.example.data.remote.DevWebWorkspace
+import com.example.data.remote.DevWebWorkspaceRegistry
 import com.example.data.remote.RetainedWebViewManager
 import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.notifications.PulseNotificationManager
@@ -139,6 +148,7 @@ import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
 import com.example.ui.screens.AiStudioWebScreen
 import com.example.ui.screens.AppearanceSettingsSheet
+import com.example.ui.screens.PinnedWebWorkspaceScreen
 import com.example.ui.screens.QrPairingScannerDialog
 import com.example.ui.screens.RetainedWebViewBridgeScreen
 import com.example.ui.screens.StorageAndCloudSyncScreen
@@ -204,7 +214,7 @@ class MainActivity : FragmentActivity() {
                             appearance = appearance,
                             onUpdateAppearance = appearanceManager::update,
                             onSelectPreset = appearanceManager::applyPreset,
-                            onResetPreset = appearanceManager::resetCurrentPresetColors
+                            onResetPreset = appearanceManager::resetToDefaultDark
                         )
                     }
 
@@ -234,6 +244,7 @@ class MainActivity : FragmentActivity() {
         backgroundedAtElapsedMs = 0L
         RetainedWebViewManager.keepTimersRunning()
         AiStudioPinnedWebViewManager.keepTimersRunning()
+        DevWebWorkspaceRegistry.keepTimersRunningAll()
     }
 
     override fun onPause() {
@@ -242,6 +253,8 @@ class MainActivity : FragmentActivity() {
         RetainedWebViewManager.keepTimersRunning()
         AiStudioPinnedWebViewManager.flushCookies()
         AiStudioPinnedWebViewManager.keepTimersRunning()
+        DevWebWorkspaceRegistry.flushCookiesAll()
+        DevWebWorkspaceRegistry.keepTimersRunningAll()
         super.onPause()
     }
 
@@ -428,12 +441,17 @@ private fun BiometricLockGateScreen(
 
 private enum class PulseTab(
     val titleRes: Int,
+    val shortTitleRes: Int,
     val icon: ImageVector,
-    val tag: String
+    val tag: String,
+    val devWorkspace: DevWebWorkspace? = null
 ) {
-    WEB_BRIDGE(R.string.nav_bridge, Icons.Default.Language, "nav_tab_bridge"),
-    AI_STUDIO(R.string.nav_ai_studio, Icons.Default.AutoAwesome, "nav_tab_ai_studio"),
-    STORAGE_SYNC(R.string.nav_sync, Icons.Default.CloudSync, "nav_tab_sync")
+    WEB_BRIDGE(R.string.nav_bridge, R.string.nav_bridge, Icons.Default.Language, "nav_tab_bridge"),
+    AI_STUDIO(R.string.nav_ai_studio, R.string.nav_ai_studio, Icons.Default.AutoAwesome, "nav_tab_ai_studio"),
+    GITHUB(R.string.nav_github, R.string.nav_github, Icons.Default.Code, "nav_tab_github", DevWebWorkspace.GITHUB),
+    VERCEL(R.string.nav_vercel, R.string.nav_vercel, Icons.Default.RocketLaunch, "nav_tab_vercel", DevWebWorkspace.VERCEL),
+    SUPABASE(R.string.nav_supabase, R.string.nav_supabase, Icons.Default.Storage, "nav_tab_supabase", DevWebWorkspace.SUPABASE),
+    STORAGE_SYNC(R.string.nav_sync, R.string.nav_sync_short, Icons.Default.CloudSync, "nav_tab_sync")
 }
 
 /**
@@ -503,6 +521,18 @@ fun AntigravityPulseApp(
     val remoteCanGoBack by RetainedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
     val aiStudioCanGoBack by AiStudioPinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
     val activeAiStudioSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
+    val githubSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GITHUB) }
+    val vercelSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.VERCEL) }
+    val supabaseSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.SUPABASE) }
+    val githubCanGoBack by githubSession.canGoBackState.collectAsStateWithLifecycle()
+    val vercelCanGoBack by vercelSession.canGoBackState.collectAsStateWithLifecycle()
+    val supabaseCanGoBack by supabaseSession.canGoBackState.collectAsStateWithLifecycle()
+    val githubActiveShortcut by githubSession.activeShortcutId.collectAsStateWithLifecycle()
+    val vercelActiveShortcut by vercelSession.activeShortcutId.collectAsStateWithLifecycle()
+    val supabaseActiveShortcut by supabaseSession.activeShortcutId.collectAsStateWithLifecycle()
+    val githubDesktopMode by githubSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val vercelDesktopMode by vercelSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val supabaseDesktopMode by supabaseSession.isDesktopModeState.collectAsStateWithLifecycle()
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(PulseTab.WEB_BRIDGE.ordinal) }
     var showAppearanceSheet by rememberSaveable { mutableStateOf(false) }
@@ -832,6 +862,7 @@ fun AntigravityPulseApp(
             offlineStartedAtMs.set(SystemClock.elapsedRealtime())
             RetainedWebViewManager.onNetworkLost()
             AiStudioPinnedWebViewManager.onNetworkLost()
+            DevWebWorkspaceRegistry.onNetworkLostAll()
         }
 
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -841,6 +872,7 @@ fun AntigravityPulseApp(
                     offlineStartedAtMs.compareAndSet(0L, SystemClock.elapsedRealtime())
                     RetainedWebViewManager.onNetworkLost()
                     AiStudioPinnedWebViewManager.onNetworkLost()
+                    DevWebWorkspaceRegistry.onNetworkLostAll()
                 }
             }
 
@@ -860,6 +892,9 @@ fun AntigravityPulseApp(
                             autoReloadAfterLongOutage = shouldAutoReload
                         )
                         AiStudioPinnedWebViewManager.onNetworkRestored(
+                            autoReloadAfterLongOutage = shouldAutoReload
+                        )
+                        DevWebWorkspaceRegistry.onNetworkRestoredAll(
                             autoReloadAfterLongOutage = shouldAutoReload
                         )
                         antigravityViewModel.recordWebViewBridgeEvent(
@@ -904,18 +939,27 @@ fun AntigravityPulseApp(
 
     val isBarsHidden = appearance.isFullscreenBarsHidden
 
-    // Smart Back navigation: close floating panel -> go back in AI Studio Web -> return to Remote -> go back in Remote
-    val isAiStudioWebBackActive = selectedTabIndex == PulseTab.AI_STUDIO.ordinal && aiStudioCanGoBack
+    // Smart Back navigation: close floating panel -> pop active workspace WebView history -> return to Remote -> pop Remote
+    val currentPulseTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
+    val isAiStudioWebBackActive = currentPulseTab == PulseTab.AI_STUDIO && aiStudioCanGoBack
+    val activeDevBackSession = when (currentPulseTab) {
+        PulseTab.GITHUB -> if (githubCanGoBack) githubSession else null
+        PulseTab.VERCEL -> if (vercelCanGoBack) vercelSession else null
+        PulseTab.SUPABASE -> if (supabaseCanGoBack) supabaseSession else null
+        else -> null
+    }
     BackHandler(
         enabled = !showAppearanceSheet &&
             (showFloatingQuickMenu ||
                 selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal ||
                 remoteCanGoBack ||
-                isAiStudioWebBackActive)
+                isAiStudioWebBackActive ||
+                activeDevBackSession != null)
     ) {
         when {
             showFloatingQuickMenu -> showFloatingQuickMenu = false
             isAiStudioWebBackActive -> AiStudioPinnedWebViewManager.goBack()
+            activeDevBackSession != null -> activeDevBackSession.goBack()
             selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal -> selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
             else -> RetainedWebViewManager.goBack()
         }
@@ -1067,39 +1111,65 @@ fun AntigravityPulseApp(
                     enter = slideInVertically(animationSpec = tween(150), initialOffsetY = { it }) + fadeIn(tween(150)),
                     exit = slideOutVertically(animationSpec = tween(150), targetOffsetY = { it }) + fadeOut(tween(150))
                 ) {
-                    Column {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(surface)
+                            .windowInsetsPadding(
+                                WindowInsets.navigationBars
+                                    .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+                            )
+                    ) {
                         HorizontalDivider(color = border, thickness = 1.dp)
-                        NavigationBar(
-                            containerColor = surface,
-                            tonalElevation = 0.dp
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             PulseTab.entries.forEachIndexed { index, tab ->
-                                NavigationBarItem(
-                                    selected = selectedTabIndex == index,
-                                    onClick = { selectedTabIndex = index },
-                                    icon = {
+                                val selected = selectedTabIndex == index
+                                val labelText = stringResource(id = tab.shortTitleRes)
+                                Column(
+                                    modifier = Modifier
+                                        .widthIn(min = 58.dp)
+                                        .heightIn(min = 52.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { selectedTabIndex = index }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                        .testTag(tab.tag),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                if (selected) accent.copy(alpha = 0.16f)
+                                                else Color.Transparent
+                                            )
+                                            .padding(horizontal = 12.dp, vertical = 3.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
                                         Icon(
                                             imageVector = tab.icon,
-                                            contentDescription = stringResource(id = tab.titleRes)
+                                            contentDescription = stringResource(id = tab.titleRes),
+                                            tint = if (selected) accent else secondaryFg,
+                                            modifier = Modifier.size(20.dp)
                                         )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = stringResource(id = tab.titleRes),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = accent,
-                                        selectedTextColor = accent,
-                                        indicatorColor = accent.copy(alpha = 0.16f),
-                                        unselectedIconColor = secondaryFg,
-                                        unselectedTextColor = secondaryFg
-                                    ),
-                                    modifier = Modifier.testTag(tab.tag)
-                                )
+                                    }
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = labelText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (selected) accent else secondaryFg,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
@@ -1232,6 +1302,21 @@ fun AntigravityPulseApp(
                                     }
                                 )
 
+                                PulseTab.GITHUB,
+                                PulseTab.VERCEL,
+                                PulseTab.SUPABASE -> {
+                                    val workspace = PulseTab.entries[safeIndex].devWorkspace!!
+                                    PinnedWebWorkspaceScreen(
+                                        workspace = workspace,
+                                        domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                        isFullscreenBarsHidden = isBarsHidden,
+                                        onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                        onStatusEvent = { eventMsg ->
+                                            antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                        }
+                                    )
+                                }
+
                                 PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
                                     dao = dao,
                                     localProfiles = serverProfiles,
@@ -1247,6 +1332,7 @@ fun AntigravityPulseApp(
                                         onUpdateAppearance { it.copy(lastActiveRemoteUrl = "") }
                                         RetainedWebViewManager.clearSensitiveBrowsingData()
                                         AiStudioPinnedWebViewManager.clearSensitiveBrowsingData()
+                                        DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData()
                                         antigravityViewModel.clearAllLocalWorkspaceData()
                                     }
                                 )
@@ -1256,7 +1342,23 @@ fun AntigravityPulseApp(
 
                     // Compact Translucent Movable Side Panel (Active by default in Fullscreen Mode)
                     if (isBarsHidden) {
-                        val isOnAiStudio = selectedTabIndex == PulseTab.AI_STUDIO.ordinal
+                        val activeTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
+                        val isOnAiStudio = activeTab == PulseTab.AI_STUDIO
+                        val activeDevWorkspace = activeTab.devWorkspace
+                        val activeDevSession = activeDevWorkspace?.let { DevWebWorkspaceRegistry.session(it) }
+                        val activeDevShortcutId = when (activeDevWorkspace) {
+                            DevWebWorkspace.GITHUB -> githubActiveShortcut
+                            DevWebWorkspace.VERCEL -> vercelActiveShortcut
+                            DevWebWorkspace.SUPABASE -> supabaseActiveShortcut
+                            null -> ""
+                        }
+                        val activeDevDesktopMode = when (activeDevWorkspace) {
+                            DevWebWorkspace.GITHUB -> githubDesktopMode
+                            DevWebWorkspace.VERCEL -> vercelDesktopMode
+                            DevWebWorkspace.SUPABASE -> supabaseDesktopMode
+                            null -> false
+                        }
+
                         MovableFloatingControlPanel(
                             isExpanded = showFloatingQuickMenu,
                             xFraction = appearance.floatingHandleXFraction,
@@ -1266,6 +1368,9 @@ fun AntigravityPulseApp(
                             activeHostLabel = activeProfile?.name ?: "Connect Remote URL",
                             isAiStudioActive = isOnAiStudio,
                             activeAiStudioSection = activeAiStudioSection,
+                            activeDevWorkspace = activeDevWorkspace,
+                            activeDevShortcutId = activeDevShortcutId,
+                            isDesktopModeEnabled = activeDevDesktopMode,
                             domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
                             surface = surface,
                             elevated = elevated,
@@ -1286,6 +1391,18 @@ fun AntigravityPulseApp(
                             onSelectAiStudioSection = { section ->
                                 AiStudioPinnedWebViewManager.navigateToSection(section)
                             },
+                            onSelectDevShortcut = { shortcut ->
+                                activeDevSession?.navigateToShortcut(shortcut)
+                            },
+                            onToggleDesktopMode = { enabled ->
+                                activeDevSession?.setDesktopMode(enabled)
+                                activeDevWorkspace?.let { ws ->
+                                    antigravityViewModel.recordWebViewBridgeEvent(
+                                        if (enabled) "${ws.displayName}: Desktop View enabled"
+                                        else "${ws.displayName}: Mobile View enabled"
+                                    )
+                                }
+                            },
                             onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
                             onOpenAiStudioExternal = {
                                 try {
@@ -1299,16 +1416,43 @@ fun AntigravityPulseApp(
                                     antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
                                 }
                             },
+                            onOpenDevWorkspaceExternal = {
+                                try {
+                                    val url = activeDevSession?.currentUrl().orEmpty()
+                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                    } else {
+                                        antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
+                                    }
+                                } catch (_: Exception) {
+                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
+                                }
+                            },
                             onOpenHostSwitcher = { showServerModal = true },
                             onOpenQrScanner = { showGlobalQrScanner = true },
-                            reloadActionLabel = if (isOnAiStudio) "Reload AI Studio" else "Reload Remote",
+                            reloadActionLabel = when {
+                                isOnAiStudio -> "Reload AI Studio"
+                                activeDevWorkspace != null -> "Reload ${activeDevWorkspace.displayName}"
+                                else -> "Reload Remote"
+                            },
                             onReloadWeb = {
-                                if (isOnAiStudio) {
-                                    AiStudioPinnedWebViewManager.reloadCurrentPage()
-                                    antigravityViewModel.recordWebViewBridgeEvent("Reloading AI Studio...")
-                                } else {
-                                    RetainedWebViewManager.reloadCurrentPage()
-                                    antigravityViewModel.recordWebViewBridgeEvent("Reloading Antigravity Remote...")
+                                when {
+                                    isOnAiStudio -> {
+                                        AiStudioPinnedWebViewManager.reloadCurrentPage()
+                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading AI Studio...")
+                                    }
+
+                                    activeDevSession != null && activeDevWorkspace != null -> {
+                                        activeDevSession.reloadCurrentPage()
+                                        antigravityViewModel.recordWebViewBridgeEvent(
+                                            "Reloading ${activeDevWorkspace.displayName}..."
+                                        )
+                                    }
+
+                                    else -> {
+                                        RetainedWebViewManager.reloadCurrentPage()
+                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading Antigravity Remote...")
+                                    }
                                 }
                             },
                             onShowBars = {

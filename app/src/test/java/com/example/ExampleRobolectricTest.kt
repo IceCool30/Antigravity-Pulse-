@@ -10,6 +10,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AntigravityDatabase
@@ -18,6 +20,7 @@ import com.example.data.remote.RetainedWebViewManager
 import com.example.notifications.PulseNotificationManager
 import com.example.ui.screens.parseAntigravityPairingPayload
 import com.example.ui.theme.AntigravityPulseTheme
+import com.example.ui.theme.AntigravityThemeMode
 import com.example.ui.theme.AppearancePreferencesManager
 import com.example.ui.theme.AppearanceSettings
 import com.example.ui.theme.OfficialAntigravityPresets
@@ -227,20 +230,32 @@ class ExampleRobolectricTest {
     @Test
     fun `app defaults to pure black OLED background fullscreen and locked developer profile`() {
         val defaultSettings = AppearanceSettings()
+        assertEquals(AntigravityThemeMode.DARK, defaultSettings.themeMode)
+        assertEquals("Default Dark", defaultSettings.presetName)
         assertEquals("#000000", defaultSettings.backgroundHex)
+        assertEquals("#FFFFFF", defaultSettings.foregroundHex)
+        assertEquals("#FFC799", defaultSettings.accentHex)
         assertEquals("#000000", OfficialAntigravityPresets.first().backgroundHex)
+        assertEquals("#FFFFFF", OfficialAntigravityPresets.first().foregroundHex)
+        assertEquals("#FFC799", OfficialAntigravityPresets.first().accentHex)
         assertTrue(defaultSettings.isFullscreenBarsHidden)
         assertEquals(0f, defaultSettings.floatingHandleXFraction, 0.001f)
         assertEquals(0.42f, defaultSettings.floatingHandleYFraction, 0.001f)
         assertEquals("Solomon Ogar Bukie", defaultSettings.developerName)
         assertEquals("solomonogarbukie@gmail.com", defaultSettings.developerEmail)
         assertEquals("IceCool30", defaultSettings.developerGithub)
-        assertTrue(defaultSettings.isMaterialYouDynamicEnabled)
+        // Material You defaults OFF so #FFC799 is guaranteed out-of-the-box on Android 12+
+        assertFalse(defaultSettings.isMaterialYouDynamicEnabled)
         assertTrue(defaultSettings.isFrostedGlassEnabled)
 
         val manager = AppearancePreferencesManager(context)
         manager.update {
             it.copy(
+                themeMode = AntigravityThemeMode.LIGHT,
+                presetName = "Dracula",
+                backgroundHex = "#282A36",
+                foregroundHex = "#F8F8F2",
+                accentHex = "#BD93F9",
                 floatingHandleXFraction = 0.85f,
                 floatingHandleYFraction = 0.72f,
                 isMaterialYouDynamicEnabled = true,
@@ -257,7 +272,18 @@ class ExampleRobolectricTest {
         assertTrue(reloaded.isMaterialYouDynamicEnabled)
         assertFalse(reloaded.isFrostedGlassEnabled)
 
+        // Reset to Default Dark restores Dark theme + #000000 / #FFFFFF / #FFC799 and disables Material You
+        manager.resetToDefaultDark()
+        val resetState = manager.settings.value
+        assertEquals(AntigravityThemeMode.DARK, resetState.themeMode)
+        assertEquals("Default Dark", resetState.presetName)
+        assertEquals("#000000", resetState.backgroundHex)
+        assertEquals("#FFFFFF", resetState.foregroundHex)
+        assertEquals("#FFC799", resetState.accentHex)
+        assertFalse(resetState.isMaterialYouDynamicEnabled)
+
         // Picking a manual preset cleanly switches off Material You dynamic accent so the preset color applies
+        manager.update { it.copy(isMaterialYouDynamicEnabled = true) }
         manager.applyPreset(OfficialAntigravityPresets.first())
         assertFalse(manager.settings.value.isMaterialYouDynamicEnabled)
 
@@ -688,5 +714,182 @@ class ExampleRobolectricTest {
         assertEquals("hidden_env", sanitizeDownloadFileName("...hidden_env"))
         assertEquals("antigravity-download", sanitizeDownloadFileName("   ...  "))
         assertEquals("report_2026_.pdf", sanitizeDownloadFileName("report:2026?.pdf"))
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp-xxhdpi")
+    fun `redesigned Settings sheet starts with collapsed customization and code preview and supports reset`() {
+        var resetCount = 0
+        val settingsState = androidx.compose.runtime.mutableStateOf(
+            AppearanceSettings(
+                themeMode = AntigravityThemeMode.LIGHT,
+                presetName = "Dracula",
+                backgroundHex = "#282A36",
+                foregroundHex = "#F8F8F2",
+                accentHex = "#BD93F9"
+            )
+        )
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = settingsState.value) {
+                com.example.ui.screens.AppearanceSettingsSheet(
+                    settings = settingsState.value,
+                    onUpdateSettings = { transform -> settingsState.value = transform(settingsState.value) },
+                    onSelectPreset = { preset ->
+                        settingsState.value = settingsState.value.copy(
+                            presetName = preset.name,
+                            backgroundHex = preset.backgroundHex,
+                            foregroundHex = preset.foregroundHex,
+                            accentHex = preset.accentHex,
+                            isMaterialYouDynamicEnabled = false
+                        )
+                    },
+                    onResetPreset = {
+                        resetCount++
+                        val defaultDark = OfficialAntigravityPresets.first()
+                        settingsState.value = settingsState.value.copy(
+                            themeMode = AntigravityThemeMode.DARK,
+                            presetName = defaultDark.name,
+                            backgroundHex = defaultDark.backgroundHex,
+                            foregroundHex = defaultDark.foregroundHex,
+                            accentHex = defaultDark.accentHex,
+                            isMaterialYouDynamicEnabled = false
+                        )
+                    },
+                    onClose = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("appearance_settings_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("reset_preset_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("open_preset_picker_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("customize_appearance_toggle").assertIsDisplayed()
+
+        // Advanced Colors/Font & Live Code Preview must be collapsed by default
+        composeTestRule.onNodeWithTag("customize_appearance_content").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("code_preview_box").assertDoesNotExist()
+
+        // Tapping Reset Default immediately restores Dark + #000000 / #FFFFFF / #FFC799
+        composeTestRule.onNodeWithTag("reset_preset_button").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(1, resetCount)
+        assertEquals(AntigravityThemeMode.DARK, settingsState.value.themeMode)
+        assertEquals("#000000", settingsState.value.backgroundHex)
+        assertEquals("#FFFFFF", settingsState.value.foregroundHex)
+        assertEquals("#FFC799", settingsState.value.accentHex)
+
+        // Expanding Customize reveals hex color pills & collapsed Code Preview toggle
+        composeTestRule.onNodeWithTag("customize_appearance_toggle").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("customize_appearance_content").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("hex_color_pill_background").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("code_preview_box").assertDoesNotExist()
+
+        // Scroll down gently to tap Live Code Preview toggle and verify preview box displays
+        composeTestRule.onNodeWithTag("settings_list").performTouchInput {
+            swipeUp(startY = centerY, endY = top + 40f, durationMillis = 500)
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("code_preview_toggle").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("code_preview_box").assertIsDisplayed()
+    }
+
+    @Test
+    fun `GitHub, Vercel, and Supabase workspaces support lazy RAM pinning, shortcuts, Desktop View, and offline recovery`() {
+        val github = com.example.data.remote.DevWebWorkspaceRegistry.session(
+            com.example.data.remote.DevWebWorkspace.GITHUB
+        )
+        val vercel = com.example.data.remote.DevWebWorkspaceRegistry.session(
+            com.example.data.remote.DevWebWorkspace.VERCEL
+        )
+        val supabase = com.example.data.remote.DevWebWorkspaceRegistry.session(
+            com.example.data.remote.DevWebWorkspace.SUPABASE
+        )
+
+        // 1. Verify Desktop User-Agent builder strips mobile/wv tokens cleanly
+        val desktopUa = com.example.data.remote.PinnedWebWorkspaceSession.buildCleanDesktopUserAgent(
+            "Mozilla/5.0 (Linux; Android 15; Pixel 9; wv) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
+        )
+        assertTrue(desktopUa.contains("X11; Linux x86_64"))
+        assertTrue(desktopUa.contains("Chrome/131.0.0.0"))
+        assertFalse(desktopUa.contains("Android"))
+        assertFalse(desktopUa.contains("; wv"))
+
+        // 2. Verify all 3 workspaces have expected developer shortcuts
+        assertEquals("https://github.com/", com.example.data.remote.DevWebWorkspace.GITHUB.defaultShortcut.url)
+        assertEquals("https://vercel.com/dashboard", com.example.data.remote.DevWebWorkspace.VERCEL.defaultShortcut.url)
+        assertEquals("https://supabase.com/dashboard/projects", com.example.data.remote.DevWebWorkspace.SUPABASE.defaultShortcut.url)
+
+        // 3. Verify PinnedWebWorkspaceScreen fullscreen vs collapsible toolbar + Desktop View + shortcuts
+        val fullscreenState = androidx.compose.runtime.mutableStateOf(true)
+        val boosterState = androidx.compose.runtime.mutableStateOf(true)
+        var boosterToggledTo = true
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.screens.PinnedWebWorkspaceScreen(
+                    workspace = com.example.data.remote.DevWebWorkspace.GITHUB,
+                    domLagBoosterEnabled = boosterState.value,
+                    isFullscreenBarsHidden = fullscreenState.value,
+                    onToggleDomBooster = { enabled ->
+                        boosterToggledTo = enabled
+                        boosterState.value = enabled
+                    },
+                    onStatusEvent = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("github_web_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_pinned_webview_container").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_collapsible_toolbar").assertDoesNotExist()
+        assertTrue(github.isPinnedInRam())
+        // Lazy allocation: Vercel and Supabase remain unallocated until opened
+        assertFalse(vercel.isPinnedInRam())
+        assertFalse(supabase.isPinnedInRam())
+
+        // Expand bars -> verify shortcuts, Desktop View toggle, Lag Booster, and Pinned badge
+        composeTestRule.runOnIdle { fullscreenState.value = false }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("github_collapsible_toolbar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_shortcut_home").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_shortcut_repos").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_shortcut_pulls").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_desktop_mode_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_lag_booster_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("github_pinned_ram_badge").assertIsDisplayed()
+
+        // Tap Repos shortcut + toggle Desktop View + toggle Lag Booster
+        composeTestRule.onNodeWithTag("github_shortcut_repos").performClick()
+        composeTestRule.onNodeWithTag("github_desktop_mode_toggle").performClick()
+        composeTestRule.onNodeWithTag("github_lag_booster_toggle").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("repos", github.activeShortcutId.value)
+        assertTrue(github.isDesktopModeState.value)
+        assertFalse(boosterToggledTo)
+
+        // 4. Verify Offline Visual Continuity transitions on registry
+        com.example.data.remote.DevWebWorkspaceRegistry.onNetworkLostAll()
+        assertFalse(github.continuityState.value.isOnline)
+        assertEquals(
+            com.example.data.remote.OfflineRecoveryStatus.OFFLINE_CACHED,
+            github.continuityState.value.status
+        )
+        com.example.data.remote.DevWebWorkspaceRegistry.onNetworkRestoredAll(autoReloadAfterLongOutage = false)
+        assertTrue(github.continuityState.value.isOnline)
+        assertEquals(
+            com.example.data.remote.OfflineRecoveryStatus.RESTORED,
+            github.continuityState.value.status
+        )
+
+        // Clean reset
+        com.example.data.remote.DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData()
+        assertFalse(github.isDesktopModeState.value)
+        assertEquals("home", github.activeShortcutId.value)
     }
 }
