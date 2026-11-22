@@ -4,6 +4,41 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-22
+
+### Added
+- **1+ Hour Multi-Workspace RAM Keep-Alive (Zero Reloads)**:
+  - Permanent window-attached lazy workspace stack that keeps every tool alive across tab switches: Antigravity Remote, T3 Code, Google AI Studio, Gemini, GitHub, Vercel, Supabase, and the multi-tab Pulse Browser.
+  - Non-detaching Settings overlay that no longer tears down or evicts the active WebView workspace.
+  - `RENDERER_PRIORITY_IMPORTANT` renderer priority across all pinned workspaces to resist OS process reclamation.
+  - Play-compliant silent `dataSync` foreground keep-alive service (`WorkspaceKeepAliveService`) with a lightweight 45-second JS timer & WebSocket heartbeat and Android 15+ safe timeout handling.
+  - `onTrimMemory` state and scroll-position backups so restored sessions resume exactly where they left off.
+  - New **Memory & Keep-Alive** Settings section with a live RAM badge, per-workspace release chips, and a direct **Battery Unrestricted** shortcut.
+- **T3 Code Web Workspace (`https://app.t3.codes/`)**:
+  - Full RAM-pinned T3 Code web experience (`T3CodeWebScreen` + `T3CodePinnedWebViewManager`).
+  - Multi-environment switcher covering T3 Cloud plus custom self-hosted and Tailscale HTTPS servers.
+  - QR pairing that preserves one-time `#token=` handshake fragments, along with `t3://` deep-link support.
+  - OAuth popup handling, Desktop View, and Offline Visual Continuity.
+- **All-in-One Developer Workspaces & Multi-Tab Pulse Browser**:
+  - RAM-pinned GitHub, Vercel, Supabase, and Gemini workspaces with zero-reload tab switching and per-workspace Desktop View.
+  - New multi-tab **Pulse Browser** (`PulseBrowserScreen` + `PulseBrowserManager`) with persistent tabs and instant tab switching.
+- **Safe, GPU-Only UI Animations**:
+  - Subtle finite transitions (<= 190ms) across workspace switching, the floating control panel, Settings overlay, chevrons, and status banners.
+  - Animations are compositor/GPU-only with zero WebView layout or reload impact.
+  - New **Smooth UI Animations** toggle in Settings.
+- **Offline Visual Continuity & Security Hardening**:
+  - Cached view retention and automatic reconnection on network drops across all workspaces.
+  - URL credential redaction in backups and notifications.
+  - Secure media origin checks for camera and microphone access.
+  - Download filename sanitization against path traversal.
+  - Light Mode adaptive contrast improvements.
+
+### Changed & Refactored
+- **Workspace Navigation & Appearance**:
+  - Expanded workspace navigation with first-class pinned developer workspaces.
+  - Refactored appearance settings for the new Motion and Memory & Keep-Alive sections.
+  - Hardened WebView error reporting and general stability across workspace managers.
+
 ## [1.1.0] - 2026-11-20
 
 ### Added
