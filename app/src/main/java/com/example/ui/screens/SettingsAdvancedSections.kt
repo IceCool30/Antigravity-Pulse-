@@ -6,6 +6,12 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -131,24 +138,39 @@ internal fun SettingsCustomizeAppearanceBlock(
                 ColorPreviewDot(color = swatchFg, border = border)
                 ColorPreviewDot(color = swatchAccent, border = border)
                 Spacer(modifier = Modifier.width(4.dp))
+                val chevronRotation by animateFloatAsState(
+                    targetValue = if (isCustomizeExpanded) 180f else 0f,
+                    animationSpec = tween(durationMillis = if (settings.isSmoothAnimationsEnabled) 180 else 0),
+                    label = "customize_chevron_rotation"
+                )
                 Icon(
-                    imageVector = if (isCustomizeExpanded) {
-                        Icons.Default.KeyboardArrowUp
-                    } else {
-                        Icons.Default.KeyboardArrowDown
-                    },
+                    imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = if (isCustomizeExpanded) {
                         "Collapse Colors, Font & Preview"
                     } else {
                         "Expand Colors, Font & Preview"
                     },
                     tint = secondaryFg,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier
+                        .size(20.dp)
+                        .graphicsLayer { rotationZ = chevronRotation }
                 )
             }
         }
 
-        AnimatedVisibility(visible = isCustomizeExpanded) {
+        AnimatedVisibility(
+            visible = isCustomizeExpanded,
+            enter = if (settings.isSmoothAnimationsEnabled) {
+                expandVertically(animationSpec = tween(190)) + fadeIn(animationSpec = tween(160))
+            } else {
+                fadeIn(animationSpec = tween(0))
+            },
+            exit = if (settings.isSmoothAnimationsEnabled) {
+                shrinkVertically(animationSpec = tween(170)) + fadeOut(animationSpec = tween(120))
+            } else {
+                fadeOut(animationSpec = tween(0))
+            }
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -373,19 +395,34 @@ internal fun SettingsCustomizeAppearanceBlock(
                             fontWeight = FontWeight.Medium,
                             color = secondaryFg
                         )
+                        val previewChevronRotation by animateFloatAsState(
+                            targetValue = if (isCodePreviewExpanded) 180f else 0f,
+                            animationSpec = tween(durationMillis = if (settings.isSmoothAnimationsEnabled) 180 else 0),
+                            label = "code_preview_chevron_rotation"
+                        )
                         Icon(
-                            imageVector = if (isCodePreviewExpanded) {
-                                Icons.Default.KeyboardArrowUp
-                            } else {
-                                Icons.Default.KeyboardArrowDown
-                            },
+                            imageVector = Icons.Default.KeyboardArrowDown,
                             contentDescription = "Toggle Live Code Preview",
                             tint = secondaryFg,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier
+                                .size(18.dp)
+                                .graphicsLayer { rotationZ = previewChevronRotation }
                         )
                     }
 
-                    AnimatedVisibility(visible = isCodePreviewExpanded) {
+                    AnimatedVisibility(
+                        visible = isCodePreviewExpanded,
+                        enter = if (settings.isSmoothAnimationsEnabled) {
+                            expandVertically(animationSpec = tween(180)) + fadeIn(animationSpec = tween(150))
+                        } else {
+                            fadeIn(animationSpec = tween(0))
+                        },
+                        exit = if (settings.isSmoothAnimationsEnabled) {
+                            shrinkVertically(animationSpec = tween(160)) + fadeOut(animationSpec = tween(120))
+                        } else {
+                            fadeOut(animationSpec = tween(0))
+                        }
+                    ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()

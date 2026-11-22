@@ -1,6 +1,14 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -65,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -119,6 +128,7 @@ fun MovableFloatingControlPanel(
     browserTabCount: Int = 1,
     isDesktopModeEnabled: Boolean = false,
     domLagBoosterEnabled: Boolean = true,
+    pinnedRamCount: Int = 0,
     surface: Color,
     elevated: Color,
     border: Color,
@@ -166,6 +176,7 @@ fun MovableFloatingControlPanel(
         val haptic = LocalHapticFeedback.current
         val currentAppearance = LocalAppearanceSettings.current
         val isFrostedGlass = currentAppearance.isFrostedGlassEnabled
+        val isSmoothAnimations = currentAppearance.isSmoothAnimationsEnabled
         val isLightMode = currentAppearance.isLightMode
         val onAccent = currentAppearance.onAccentColor
         val successColor = currentAppearance.successColor
@@ -273,7 +284,21 @@ fun MovableFloatingControlPanel(
                     modifier = Modifier.size(16.dp)
                 )
             }
-        } else {
+        }
+
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = if (isSmoothAnimations) {
+                fadeIn(tween(140)) + scaleIn(tween(150), initialScale = 0.94f)
+            } else {
+                fadeIn(tween(0))
+            },
+            exit = if (isSmoothAnimations) {
+                fadeOut(tween(100)) + scaleOut(tween(110), targetScale = 0.95f)
+            } else {
+                fadeOut(tween(0))
+            }
+        ) {
             val activeTabLabel = tabs.firstOrNull { it.index == selectedTabIndex }?.title ?: "Remote"
             val headerTitle = when {
                 isT3CodeActive -> "T3 Code"
@@ -283,36 +308,37 @@ fun MovableFloatingControlPanel(
                 else -> activeTabLabel
             }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.14f))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        onExpandedChange(false)
-                    }
-                    .testTag("floating_panel_backdrop")
-            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.14f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            onExpandedChange(false)
+                        }
+                        .testTag("floating_panel_backdrop")
+                )
 
-            val maxPanelX = (containerWidthPx - panelSize.width - edgeMarginPx).coerceAtLeast(edgeMarginPx)
-            val maxPanelY = (containerHeightPx - panelSize.height - edgeMarginPx).coerceAtLeast(edgeMarginPx)
-            val clampedPanelX = handleX.coerceIn(edgeMarginPx, maxPanelX)
-            val clampedPanelY = handleY.coerceIn(edgeMarginPx, maxPanelY)
+                val maxPanelX = (containerWidthPx - panelSize.width - edgeMarginPx).coerceAtLeast(edgeMarginPx)
+                val maxPanelY = (containerHeightPx - panelSize.height - edgeMarginPx).coerceAtLeast(edgeMarginPx)
+                val clampedPanelX = handleX.coerceIn(edgeMarginPx, maxPanelX)
+                val clampedPanelY = handleY.coerceIn(edgeMarginPx, maxPanelY)
 
-            val panelShape = RoundedCornerShape(20.dp)
-            Column(
-                modifier = Modifier
-                    .offset {
-                        IntOffset(
-                            clampedPanelX.roundToInt(),
-                            clampedPanelY.roundToInt()
-                        )
-                    }
-                    .onSizeChanged { panelSize = it }
-                    .width(224.dp)
-                    .heightIn(max = (maxHeight - 24.dp).coerceAtLeast(200.dp))
+                val panelShape = RoundedCornerShape(20.dp)
+                Column(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                clampedPanelX.roundToInt(),
+                                clampedPanelY.roundToInt()
+                            )
+                        }
+                        .onSizeChanged { panelSize = it }
+                        .width(224.dp)
+                        .heightIn(max = (this@BoxWithConstraints.maxHeight - 24.dp).coerceAtLeast(200.dp))
                     .shadow(14.dp, panelShape, ambientColor = Color.Black.copy(alpha = 0.45f))
                     .frostedGlass(
                         shape = panelShape,
@@ -366,6 +392,20 @@ fun MovableFloatingControlPanel(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (pinnedRamCount > 0) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "${pinnedRamCount} RAM",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = successColor,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(successColor.copy(alpha = 0.14f))
+                                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                                    .testTag("floating_panel_ram_badge")
+                            )
+                        }
                     }
 
                     IconButton(
@@ -398,6 +438,7 @@ fun MovableFloatingControlPanel(
                         badge = activeTabLabel,
                         icon = Icons.Default.Apps,
                         expanded = workspacesDropdownOpen,
+                        smoothAnimations = isSmoothAnimations,
                         accent = accent,
                         fg = fg,
                         secondaryFg = secondaryFg,
@@ -407,7 +448,19 @@ fun MovableFloatingControlPanel(
                         onClick = { workspacesDropdownOpen = !workspacesDropdownOpen }
                     )
 
-                    AnimatedVisibility(visible = workspacesDropdownOpen) {
+                    AnimatedVisibility(
+                        visible = workspacesDropdownOpen,
+                        enter = if (isSmoothAnimations) {
+                            expandVertically(tween(170)) + fadeIn(tween(140))
+                        } else {
+                            fadeIn(tween(0))
+                        },
+                        exit = if (isSmoothAnimations) {
+                            shrinkVertically(tween(140)) + fadeOut(tween(100))
+                        } else {
+                            fadeOut(tween(0))
+                        }
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -474,6 +527,7 @@ fun MovableFloatingControlPanel(
                         badge = null,
                         icon = Icons.Default.Tune,
                         expanded = pageToolsDropdownOpen,
+                        smoothAnimations = isSmoothAnimations,
                         accent = accent,
                         fg = fg,
                         secondaryFg = secondaryFg,
@@ -483,7 +537,19 @@ fun MovableFloatingControlPanel(
                         onClick = { pageToolsDropdownOpen = !pageToolsDropdownOpen }
                     )
 
-                    AnimatedVisibility(visible = pageToolsDropdownOpen) {
+                    AnimatedVisibility(
+                        visible = pageToolsDropdownOpen,
+                        enter = if (isSmoothAnimations) {
+                            expandVertically(tween(170)) + fadeIn(tween(140))
+                        } else {
+                            fadeIn(tween(0))
+                        },
+                        exit = if (isSmoothAnimations) {
+                            shrinkVertically(tween(140)) + fadeOut(tween(100))
+                        } else {
+                            fadeOut(tween(0))
+                        }
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -869,6 +935,7 @@ fun MovableFloatingControlPanel(
                     }
                 }
             }
+            }
         }
     }
 }
@@ -879,6 +946,7 @@ private fun PanelDropdownHeader(
     badge: String?,
     icon: ImageVector,
     expanded: Boolean,
+    smoothAnimations: Boolean,
     accent: Color,
     fg: Color,
     secondaryFg: Color,
@@ -887,6 +955,11 @@ private fun PanelDropdownHeader(
     testTag: String,
     onClick: () -> Unit
 ) {
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(durationMillis = if (smoothAnimations) 160 else 0),
+        label = "panel_dropdown_chevron"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -933,10 +1006,12 @@ private fun PanelDropdownHeader(
             }
         }
         Icon(
-            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            imageVector = Icons.Default.KeyboardArrowDown,
             contentDescription = if (expanded) "Collapse $label" else "Expand $label",
             tint = if (expanded) accent else secondaryFg,
-            modifier = Modifier.size(17.dp)
+            modifier = Modifier
+                .size(17.dp)
+                .graphicsLayer { rotationZ = chevronRotation }
         )
     }
 }

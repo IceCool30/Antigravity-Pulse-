@@ -67,6 +67,9 @@ object AiStudioPinnedWebViewManager {
 
     private var lastGoodUrl: String = AiStudioWebSection.NEW_CHAT.url
     private var mainFrameFailedInCurrentLoad: Boolean = false
+    private var savedStateBackup: WebViewStateBackup? = null
+    private var pendingRestoreScroll: Pair<Int, Int>? = null
+    private var pinnedSinceElapsedMs: Long = 0L
 
     private fun captureLatestSnapshotIfHealthy(view: WebView? = pinnedAiStudioWebView) {
         val target = view ?: return
@@ -204,7 +207,11 @@ object AiStudioPinnedWebViewManager {
 
     fun isPinnedInRam(): Boolean = pinnedAiStudioWebView != null
 
-    fun currentUrl(): String = currentLoadedUrl.ifBlank { AiStudioWebSection.NEW_CHAT.url }
+    fun pinnedSinceElapsedMs(): Long = pinnedSinceElapsedMs
+
+    fun hasStateBackup(): Boolean = savedStateBackup != null
+
+    fun currentUrl(): String = currentLoadedUrl.ifBlank { lastGoodUrl.ifBlank { AiStudioWebSection.NEW_CHAT.url } }
 
     fun flushCookies() {
         try {
@@ -215,9 +222,40 @@ object AiStudioPinnedWebViewManager {
 
     fun keepTimersRunning() {
         try {
+            pinnedAiStudioWebView?.onResume()
             pinnedAiStudioWebView?.resumeTimers()
         } catch (_: Exception) {
         }
+    }
+
+    fun dispatchKeepAliveHeartbeat() {
+        WebViewOfflineCacheHelper.dispatchKeepAliveHeartbeat(pinnedAiStudioWebView)
+        flushCookies()
+    }
+
+    fun saveStateBackup() {
+        val wv = pinnedAiStudioWebView ?: return
+        WebViewOfflineCacheHelper.runOnMainThread {
+            WebViewOfflineCacheHelper.captureStateBackup(wv)?.let { savedStateBackup = it }
+        }
+    }
+
+    fun releaseFromRam() {
+        val oldView = pinnedAiStudioWebView ?: return
+        saveStateBackup()
+        pinnedAiStudioWebView = null
+        pinnedSinceElapsedMs = 0L
+        currentLoadedUrl = ""
+        WebViewOfflineCacheHelper.runOnMainThread {
+            try {
+                oldView.stopLoading()
+                (oldView.parent as? ViewGroup)?.removeView(oldView)
+                oldView.destroy()
+            } catch (_: Exception) {
+            }
+        }
+        _rendererGeneration.value = _rendererGeneration.value + 1
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     fun canGoBack(): Boolean = pinnedAiStudioWebView?.canGoBack() == true
@@ -389,9 +427,13 @@ object AiStudioPinnedWebViewManager {
         currentLoadedUrl = ""
         lastGoodUrl = AiStudioWebSection.NEW_CHAT.url
         mainFrameFailedInCurrentLoad = false
+        savedStateBackup = null
+        pendingRestoreScroll = null
+        pinnedSinceElapsedMs = 0L
         _continuityState.value = WebViewContinuityState()
         _canGoBackState.value = false
         _rendererGeneration.value = _rendererGeneration.value + 1
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -420,7 +462,7 @@ object AiStudioPinnedWebViewManager {
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
                 } catch (_: Exception) {
                 }
             }
@@ -631,7 +673,14 @@ object AiStudioPinnedWebViewManager {
                             status = if (wasRecovering) OfflineRecoveryStatus.RESTORED else OfflineRecoveryStatus.ONLINE,
                             statusMessage = if (wasRecovering) "Back online • AI Studio updated" else ""
                         )
-                        view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
+                        pendingRestoreScroll?.let { (sx, sy) ->
+                            pendingRestoreScroll = null
+                            WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
+                        }
+                        view?.postDelayed({
+                            captureLatestSnapshotIfHealthy(view)
+                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { savedStateBackup = it }
+                        }, 650L)
                     }
                     if (!isErrorPage) {
                         RetainedWebViewManager.injectMobileLayoutFix(view)
@@ -647,6 +696,7 @@ object AiStudioPinnedWebViewManager {
                     if (pinnedAiStudioWebView === crashedView) {
                         pinnedAiStudioWebView = null
                     }
+                    pinnedSinceElapsedMs = 0L
                     currentLoadedUrl = ""
                     WebViewOfflineCacheHelper.runOnMainThread {
                         try {
@@ -656,18 +706,29 @@ object AiStudioPinnedWebViewManager {
                         }
                     }
                     _rendererGeneration.value = _rendererGeneration.value + 1
-                    onPageEvent("AI Studio renderer recovered automatically.")
+                    WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
+                    onPageEvent("AI Studio renderer recovered at your last page.")
                     return true
                 }
             }
             pinnedAiStudioWebView = this
+            pinnedSinceElapsedMs = android.os.SystemClock.elapsedRealtime()
+            WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
         }
 
         (webView.parent as? ViewGroup)?.removeView(webView)
 
         if (currentLoadedUrl.isBlank()) {
-            currentLoadedUrl = initialSection.url
-            webView.loadUrl(initialSection.url)
+            val fallbackUrl = lastGoodUrl.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
+                ?: initialSection.url
+            val backup = savedStateBackup
+            currentLoadedUrl = backup?.url?.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) } ?: fallbackUrl
+            if (backup != null) {
+                pendingRestoreScroll = backup.scrollX to backup.scrollY
+                WebViewOfflineCacheHelper.restoreStateBackupOrLoad(webView, backup, fallbackUrl)
+            } else {
+                webView.loadUrl(fallbackUrl)
+            }
         } else {
             applyLagBooster(domLagBooster)
         }

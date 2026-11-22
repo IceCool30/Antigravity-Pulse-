@@ -81,6 +81,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.draw.shadow
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
@@ -90,6 +91,7 @@ fun RetainedWebViewBridgeScreen(
     telemetry: BridgeTelemetry,
     savedFallbackEndpoint: String = "",
     isFullscreenBarsHidden: Boolean,
+    isWorkspaceActive: Boolean = true,
     onToggleDomBooster: (Boolean) -> Unit,
     onSaveAndConnectUrl: (String) -> Unit,
     onOpenHostSwitcher: () -> Unit = {},
@@ -272,10 +274,13 @@ fun RetainedWebViewBridgeScreen(
                                 endpointUrl = effectiveEndpoint,
                                 domLagBooster = telemetry.domLagBoosterEnabled,
                                 onJsBridgeMessage = onJsBridgeEvent
-                            )
+                            ).also { wv ->
+                                WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
+                            }
                         },
-                        update = { _ ->
-                            // No-op on recomposition so the WebView never reloads when switching tabs
+                        update = { wv ->
+                            // Keep WebView permanently attached to window; toggle visibility/focus without reloading
+                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
                         },
                         modifier = Modifier
                             .fillMaxSize()

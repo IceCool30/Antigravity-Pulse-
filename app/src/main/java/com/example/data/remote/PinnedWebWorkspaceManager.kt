@@ -104,6 +104,9 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
     private var domLagBoosterActive: Boolean = true
     private var lastGoodUrl: String = workspace.defaultShortcut.url
     private var mainFrameFailedInCurrentLoad: Boolean = false
+    private var savedStateBackup: WebViewStateBackup? = null
+    private var pendingRestoreScroll: Pair<Int, Int>? = null
+    private var pinnedSinceElapsedMs: Long = 0L
 
     private val _canGoBackState = MutableStateFlow(false)
     val canGoBackState: StateFlow<Boolean> = _canGoBackState.asStateFlow()
@@ -125,9 +128,13 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
 
     fun isPinnedInRam(): Boolean = pinnedWebView != null
 
+    fun pinnedSinceElapsedMs(): Long = pinnedSinceElapsedMs
+
+    fun hasStateBackup(): Boolean = savedStateBackup != null
+
     fun currentUrl(): String {
         val live = pinnedWebView?.url?.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
-        return live ?: currentLoadedUrl.ifBlank { workspace.defaultShortcut.url }
+        return live ?: currentLoadedUrl.ifBlank { lastGoodUrl.ifBlank { workspace.defaultShortcut.url } }
     }
 
     private fun refreshCanGoBack(view: WebView? = pinnedWebView) {
@@ -359,6 +366,36 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
         }
     }
 
+    fun dispatchKeepAliveHeartbeat() {
+        WebViewOfflineCacheHelper.dispatchKeepAliveHeartbeat(pinnedWebView)
+        flushCookies()
+    }
+
+    fun saveStateBackup() {
+        val wv = pinnedWebView ?: return
+        WebViewOfflineCacheHelper.runOnMainThread {
+            WebViewOfflineCacheHelper.captureStateBackup(wv)?.let { savedStateBackup = it }
+        }
+    }
+
+    fun releaseFromRam() {
+        val oldView = pinnedWebView ?: return
+        saveStateBackup()
+        pinnedWebView = null
+        pinnedSinceElapsedMs = 0L
+        currentLoadedUrl = ""
+        WebViewOfflineCacheHelper.runOnMainThread {
+            try {
+                oldView.stopLoading()
+                (oldView.parent as? ViewGroup)?.removeView(oldView)
+                oldView.destroy()
+            } catch (_: Exception) {
+            }
+        }
+        _rendererGeneration.value = _rendererGeneration.value + 1
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
+    }
+
     fun applyLagBooster(enabled: Boolean) {
         domLagBoosterActive = enabled
         val target = pinnedWebView ?: return
@@ -491,11 +528,15 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
         currentLoadedUrl = ""
         lastGoodUrl = workspace.defaultShortcut.url
         mainFrameFailedInCurrentLoad = false
+        savedStateBackup = null
+        pendingRestoreScroll = null
+        pinnedSinceElapsedMs = 0L
         _activeShortcutId.value = workspace.defaultShortcut.id
         _isDesktopModeState.value = false
         _continuityState.value = WebViewContinuityState()
         _canGoBackState.value = false
         _rendererGeneration.value = _rendererGeneration.value + 1
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -523,7 +564,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
                 } catch (_: Exception) {
                 }
             }
@@ -732,7 +773,14 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                             status = if (wasRecovering) OfflineRecoveryStatus.RESTORED else OfflineRecoveryStatus.ONLINE,
                             statusMessage = if (wasRecovering) "Back online • ${workspace.displayName} updated" else ""
                         )
-                        view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
+                        pendingRestoreScroll?.let { (sx, sy) ->
+                            pendingRestoreScroll = null
+                            WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
+                        }
+                        view?.postDelayed({
+                            captureLatestSnapshotIfHealthy(view)
+                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { savedStateBackup = it }
+                        }, 650L)
                     }
                     if (!isErrorPage) {
                         if (!_isDesktopModeState.value) {
@@ -750,6 +798,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                     if (pinnedWebView === crashedView) {
                         pinnedWebView = null
                     }
+                    pinnedSinceElapsedMs = 0L
                     currentLoadedUrl = ""
                     WebViewOfflineCacheHelper.runOnMainThread {
                         try {
@@ -759,20 +808,30 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                         }
                     }
                     _rendererGeneration.value = _rendererGeneration.value + 1
-                    onPageEvent("${workspace.displayName} renderer recovered automatically.")
+                    WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
+                    onPageEvent("${workspace.displayName} renderer recovered at your last page.")
                     return true
                 }
             }
             pinnedWebView = this
+            pinnedSinceElapsedMs = android.os.SystemClock.elapsedRealtime()
+            WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
         }
 
         (webView.parent as? ViewGroup)?.removeView(webView)
 
         if (currentLoadedUrl.isBlank()) {
-            val initialUrl = workspace.defaultShortcut.url
-            currentLoadedUrl = initialUrl
-            lastGoodUrl = initialUrl
-            webView.loadUrl(initialUrl)
+            val fallbackUrl = lastGoodUrl.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
+                ?: workspace.defaultShortcut.url
+            val backup = savedStateBackup
+            currentLoadedUrl = backup?.url?.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) } ?: fallbackUrl
+            lastGoodUrl = currentLoadedUrl
+            if (backup != null) {
+                pendingRestoreScroll = backup.scrollX to backup.scrollY
+                WebViewOfflineCacheHelper.restoreStateBackupOrLoad(webView, backup, fallbackUrl)
+            } else {
+                webView.loadUrl(fallbackUrl)
+            }
         } else {
             applyLagBooster(domLagBooster)
         }
@@ -809,6 +868,16 @@ object DevWebWorkspaceRegistry {
     fun flushCookiesAll() {
         sessions.values.forEach { it.flushCookies() }
     }
+
+    fun dispatchKeepAliveHeartbeatAll() {
+        sessions.values.forEach { if (it.isPinnedInRam()) it.dispatchKeepAliveHeartbeat() }
+    }
+
+    fun saveAllStateBackups() {
+        sessions.values.forEach { if (it.isPinnedInRam()) it.saveStateBackup() }
+    }
+
+    fun allSessions(): Collection<PinnedWebWorkspaceSession> = sessions.values
 
     fun applyLagBoosterAll(enabled: Boolean) {
         sessions.values.forEach { if (it.isPinnedInRam()) it.applyLagBooster(enabled) }

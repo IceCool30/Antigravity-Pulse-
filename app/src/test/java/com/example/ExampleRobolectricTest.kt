@@ -1431,4 +1431,161 @@ class ExampleRobolectricTest {
         assertEquals(1, com.example.data.remote.T3CodePinnedWebViewManager.savedEnvironments.value.size)
         assertFalse(com.example.data.remote.T3CodePinnedWebViewManager.isDesktopModeState.value)
     }
+
+    @Test
+    fun `RAM keep-alive coordinator formats durations, summarizes active workspaces, builds silent ongoing notification, and persists preferences`() {
+        // 1. Default preferences enable 1+ hour Keep-Alive and Smooth GPU-only UI Animations
+        val defaults = AppearanceSettings()
+        assertTrue(defaults.isBackgroundKeepAliveEnabled)
+        assertTrue(defaults.isSmoothAnimationsEnabled)
+
+        val prefsManager = AppearancePreferencesManager(context)
+        prefsManager.update {
+            it.copy(
+                isBackgroundKeepAliveEnabled = false,
+                isSmoothAnimationsEnabled = false
+            )
+        }
+        val reloaded = AppearancePreferencesManager(context).settings.value
+        assertFalse(reloaded.isBackgroundKeepAliveEnabled)
+        assertFalse(reloaded.isSmoothAnimationsEnabled)
+
+        // Restore defaults cleanly
+        prefsManager.update {
+            it.copy(
+                isBackgroundKeepAliveEnabled = true,
+                isSmoothAnimationsEnabled = true
+            )
+        }
+
+        // 2. Duration formatting for Standby, Live (<1m), minutes, exact hours, and hours+minutes
+        val now = 10_000_000L
+        assertEquals(
+            "Standby",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.formatPinnedDuration(0L, now)
+        )
+        assertEquals(
+            "Live",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.formatPinnedDuration(now - 30_000L, now)
+        )
+        assertEquals(
+            "12m",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.formatPinnedDuration(now - 12 * 60_000L, now)
+        )
+        assertEquals(
+            "1h",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.formatPinnedDuration(now - 60 * 60_000L, now)
+        )
+        assertEquals(
+            "1h 15m",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.formatPinnedDuration(now - 75 * 60_000L, now)
+        )
+
+        // 3. Active workspace summary formatting (0, <=3, and >3 items with "+N more")
+        assertEquals(
+            "",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.buildActiveSummaryText(emptyList())
+        )
+        val threeStatuses = listOf(
+            com.example.data.remote.PinnedWorkspaceRamStatus("remote", "Remote", true, 100L, false),
+            com.example.data.remote.PinnedWorkspaceRamStatus("t3_code", "T3 Code", true, 100L, false),
+            com.example.data.remote.PinnedWorkspaceRamStatus("ai_studio", "AI Studio", true, 100L, false)
+        )
+        assertEquals(
+            "Remote, T3 Code, AI Studio",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.buildActiveSummaryText(threeStatuses)
+        )
+        val fiveStatuses = threeStatuses + listOf(
+            com.example.data.remote.PinnedWorkspaceRamStatus("github", "GitHub", true, 100L, false),
+            com.example.data.remote.PinnedWorkspaceRamStatus("vercel", "Vercel", true, 100L, false),
+            com.example.data.remote.PinnedWorkspaceRamStatus("supabase", "Supabase", false, 0L, false)
+        )
+        assertEquals(
+            "Remote, T3 Code, AI Studio +2 more",
+            com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.buildActiveSummaryText(fiveStatuses)
+        )
+
+        // 4. Trim-memory handler runs safely without crashing even with zero or multiple pinned workspaces
+        com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.onSystemTrimMemory(
+            android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND
+        )
+        com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator.onSystemTrimMemory(
+            android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
+        )
+
+        // 5. Silent ongoing keep-alive foreground notification verification
+        PulseNotificationManager.ensureChannelsCreated(context)
+        val stopPendingIntent = android.app.PendingIntent.getService(
+            context,
+            1051,
+            android.content.Intent(context, com.example.service.WorkspaceKeepAliveService::class.java),
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = PulseNotificationManager.buildKeepAliveNotification(
+            context = context,
+            pinnedCount = 4,
+            workspaceSummary = "Remote, T3 Code, AI Studio +1 more",
+            stopPendingIntent = stopPendingIntent
+        )
+        assertNotNull(notification)
+        assertTrue((notification.flags and android.app.Notification.FLAG_ONGOING_EVENT) != 0)
+        assertEquals(PulseNotificationManager.CHANNEL_WORKSPACE_KEEP_ALIVE, notification.channelId)
+        val title = notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()
+        val text = notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()
+        assertEquals("4 Workspaces Pinned in RAM", title)
+        assertTrue(text?.contains("Remote, T3 Code, AI Studio +1 more") == true)
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp-xxhdpi")
+    fun `Memory and Keep-Alive section renders controls and toggles keep-alive, battery settings, and smooth animations`() {
+        val settingsState = androidx.compose.runtime.mutableStateOf(AppearanceSettings())
+        var keepAliveCallbackValue: Boolean? = null
+        var batterySettingsClicks = 0
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = settingsState.value) {
+                com.example.ui.screens.SettingsKeepAliveSection(
+                    settings = settingsState.value,
+                    permissionsRefreshTick = 0,
+                    bg = settingsState.value.backgroundColor,
+                    surface = settingsState.value.surfaceColor,
+                    elevated = settingsState.value.elevatedSurfaceColor,
+                    border = settingsState.value.borderColor,
+                    fg = settingsState.value.foregroundColor,
+                    secondaryFg = settingsState.value.foregroundColor.copy(alpha = 0.72f),
+                    accent = settingsState.value.accentColor,
+                    isFrostedGlass = settingsState.value.isFrostedGlassEnabled,
+                    onUpdateSettings = { transform -> settingsState.value = transform(settingsState.value) },
+                    onToggleBackgroundKeepAlive = { enabled -> keepAliveCallbackValue = enabled },
+                    onReleaseWorkspaceFromRam = {},
+                    onOpenBatterySettings = { batterySettingsClicks++ }
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("settings_keep_alive_section").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("keep_alive_pinned_count_badge").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("background_keep_alive_switch").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("battery_unrestricted_settings_row").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("smooth_animations_switch").assertIsDisplayed()
+
+        // Toggle 1+ Hour RAM Keep-Alive OFF
+        composeTestRule.onNodeWithTag("background_keep_alive_switch").performClick()
+        composeTestRule.waitForIdle()
+        assertFalse(settingsState.value.isBackgroundKeepAliveEnabled)
+        assertEquals(false, keepAliveCallbackValue)
+
+        // Toggle Smooth UI Animations OFF
+        composeTestRule.onNodeWithTag("smooth_animations_switch").performClick()
+        composeTestRule.waitForIdle()
+        assertFalse(settingsState.value.isSmoothAnimationsEnabled)
+
+        // Tap Battery Unrestricted settings row
+        composeTestRule.onNodeWithTag("battery_unrestricted_settings_row").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(1, batterySettingsClicks)
+    }
 }
+

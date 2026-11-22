@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.DevWebWorkspace
 import com.example.data.remote.DevWebWorkspaceRegistry
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.JetBrainsMonoFontFamily
@@ -69,6 +70,7 @@ fun PinnedWebWorkspaceScreen(
     workspace: DevWebWorkspace,
     domLagBoosterEnabled: Boolean,
     isFullscreenBarsHidden: Boolean,
+    isWorkspaceActive: Boolean = true,
     onToggleDomBooster: (Boolean) -> Unit,
     onStatusEvent: (String) -> Unit
 ) {
@@ -325,9 +327,12 @@ fun PinnedWebWorkspaceScreen(
                             context = ctx,
                             domLagBooster = domLagBoosterEnabled,
                             onPageEvent = onStatusEvent
-                        )
+                        ).also { wv ->
+                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
+                        }
                     },
-                    update = { _ ->
+                    update = { wv ->
+                        WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
                         session.applyLagBooster(domLagBoosterEnabled)
                     }
                 )

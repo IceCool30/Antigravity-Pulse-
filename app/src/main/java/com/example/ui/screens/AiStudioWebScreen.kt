@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.AiStudioWebSection
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.JetBrainsMonoFontFamily
@@ -69,6 +70,7 @@ import com.example.ui.theme.LocalAppearanceSettings
 fun AiStudioWebScreen(
     domLagBoosterEnabled: Boolean,
     isFullscreenBarsHidden: Boolean,
+    isWorkspaceActive: Boolean = true,
     onToggleDomBooster: (Boolean) -> Unit,
     onStatusEvent: (String) -> Unit
 ) {
@@ -270,10 +272,13 @@ fun AiStudioWebScreen(
                             initialSection = activeSection,
                             domLagBooster = domLagBoosterEnabled,
                             onPageEvent = onStatusEvent
-                        )
+                        ).also { wv ->
+                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
+                        }
                     },
-                    update = { _ ->
-                        // No-op on recomposition so AI Studio stays pinned in RAM without flicker or reload
+                    update = { wv ->
+                        // Keep WebView permanently attached to window; toggle visibility/focus without reloading
+                        WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
                     },
                     modifier = Modifier
                         .fillMaxSize()

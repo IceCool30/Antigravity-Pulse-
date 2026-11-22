@@ -31,6 +31,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -128,6 +130,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -138,6 +141,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -157,7 +161,9 @@ import com.example.data.remote.PulseBrowserManager
 import com.example.data.remote.RetainedWebViewManager
 import com.example.data.remote.T3CodePinnedWebViewManager
 import com.example.data.remote.WebViewOfflineCacheHelper
+import com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator
 import com.example.notifications.PulseNotificationManager
+import com.example.service.WorkspaceKeepAliveService
 import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
 import com.example.ui.screens.AiStudioWebScreen
@@ -288,15 +294,11 @@ class MainActivity : FragmentActivity() {
 
     override fun onPause() {
         PulseNotificationManager.isAppInForeground = false
-        RetainedWebViewManager.flushCookies()
+        WorkspaceMemoryKeepAliveCoordinator.saveAllStateBackups()
         RetainedWebViewManager.keepTimersRunning()
-        AiStudioPinnedWebViewManager.flushCookies()
         AiStudioPinnedWebViewManager.keepTimersRunning()
-        T3CodePinnedWebViewManager.flushCookies()
         T3CodePinnedWebViewManager.keepTimersRunning()
-        DevWebWorkspaceRegistry.flushCookiesAll()
         DevWebWorkspaceRegistry.keepTimersRunningAll()
-        PulseBrowserManager.flushCookiesAll()
         PulseBrowserManager.keepTimersRunningAll()
         super.onPause()
     }
@@ -304,13 +306,18 @@ class MainActivity : FragmentActivity() {
     override fun onStop() {
         PulseNotificationManager.isAppInForeground = false
         backgroundedAtElapsedMs = SystemClock.elapsedRealtime()
-        RetainedWebViewManager.flushCookies()
+        WorkspaceMemoryKeepAliveCoordinator.saveAllStateBackups()
         RetainedWebViewManager.keepTimersRunning()
-        AiStudioPinnedWebViewManager.flushCookies()
         AiStudioPinnedWebViewManager.keepTimersRunning()
-        T3CodePinnedWebViewManager.flushCookies()
         T3CodePinnedWebViewManager.keepTimersRunning()
+        DevWebWorkspaceRegistry.keepTimersRunningAll()
+        PulseBrowserManager.keepTimersRunningAll()
         super.onStop()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        WorkspaceMemoryKeepAliveCoordinator.onSystemTrimMemory(level)
     }
 }
 
@@ -511,7 +518,19 @@ private enum class PulseTab(
     VERCEL(R.string.nav_vercel, R.string.nav_vercel, Icons.Default.RocketLaunch, "nav_tab_vercel", DevWebWorkspace.VERCEL),
     SUPABASE(R.string.nav_supabase, R.string.nav_supabase, Icons.Default.Storage, "nav_tab_supabase", DevWebWorkspace.SUPABASE),
     BROWSER(R.string.nav_browser, R.string.nav_browser, Icons.Default.Public, "nav_tab_browser"),
-    STORAGE_SYNC(R.string.nav_sync, R.string.nav_sync_short, Icons.Default.CloudSync, "nav_tab_sync")
+    STORAGE_SYNC(R.string.nav_sync, R.string.nav_sync_short, Icons.Default.CloudSync, "nav_tab_sync");
+
+    fun workspaceCoordinatorId(): String? = when (this) {
+        WEB_BRIDGE -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_REMOTE
+        T3_CODE -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_T3_CODE
+        AI_STUDIO -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_AI_STUDIO
+        GEMINI -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_GEMINI
+        GITHUB -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_GITHUB
+        VERCEL -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_VERCEL
+        SUPABASE -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_SUPABASE
+        BROWSER -> WorkspaceMemoryKeepAliveCoordinator.WORKSPACE_BROWSER
+        STORAGE_SYNC -> null
+    }
 }
 
 /**
@@ -606,8 +625,14 @@ fun AntigravityPulseApp(
     val browserActiveTabId by PulseBrowserManager.activeTabId.collectAsStateWithLifecycle()
     val isBrowserBarVisible by PulseBrowserManager.isAddressBarVisible.collectAsStateWithLifecycle()
     val activeBrowserTab = browserTabs.firstOrNull { it.id == browserActiveTabId } ?: browserTabs.first()
+    val pinnedRamCount by WorkspaceMemoryKeepAliveCoordinator.pinnedCount.collectAsStateWithLifecycle()
+    val workspaceRamStatuses by WorkspaceMemoryKeepAliveCoordinator.workspaceStatuses.collectAsStateWithLifecycle()
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(PulseTab.WEB_BRIDGE.ordinal) }
+    // Window-Attached Lazy Workspace Stack: every visited web workspace stays mounted in the
+    // Compose hierarchy and permanently attached to the Android window so switching tabs never
+    // detaches, throttles, or reloads even after 1+ hour in the background.
+    var mountedWebTabs by remember { mutableStateOf(setOf(PulseTab.WEB_BRIDGE)) }
     var showAppearanceSheet by rememberSaveable { mutableStateOf(false) }
     var showFloatingQuickMenu by rememberSaveable { mutableStateOf(false) }
     var showServerModal by rememberSaveable { mutableStateOf(false) }
@@ -1118,6 +1143,8 @@ fun AntigravityPulseApp(
     // Centralized multi-user isolation wipe: purges local Room hosts, saved URL, all WebView
     // RAM/DOM sessions, cookies, WebStorage, HTTP auth credentials, and lingering notifications.
     fun performFullLocalSessionWipe(clearSavedUid: Boolean) {
+        WorkspaceKeepAliveService.stop(context)
+        mountedWebTabs = setOf(PulseTab.WEB_BRIDGE)
         onUpdateAppearance {
             it.copy(
                 lastActiveRemoteUrl = "",
@@ -1185,9 +1212,40 @@ fun AntigravityPulseApp(
     val accent = activeTheme.accentColor
 
     val isBarsHidden = appearance.isFullscreenBarsHidden
+    val smoothAnimations = appearance.isSmoothAnimationsEnabled
 
     // Smart Back navigation: close floating panel -> pop active workspace/browser WebView history -> return to Remote -> pop Remote
     val currentPulseTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
+    val effectiveMountedWebTabs = remember(mountedWebTabs, currentPulseTab) {
+        if (currentPulseTab != PulseTab.STORAGE_SYNC) mountedWebTabs + currentPulseTab else mountedWebTabs
+    }
+    LaunchedEffect(currentPulseTab) {
+        if (currentPulseTab != PulseTab.STORAGE_SYNC && currentPulseTab !in mountedWebTabs) {
+            mountedWebTabs = mountedWebTabs + currentPulseTab
+        }
+    }
+
+    // Evict released non-active workspaces from mountedWebTabs when user explicitly frees RAM in Settings
+    val latestCurrentTab by rememberUpdatedState(currentPulseTab)
+    LaunchedEffect(Unit) {
+        WorkspaceMemoryKeepAliveCoordinator.releasedWorkspaceEvents.collect { releasedId ->
+            val targetTab = PulseTab.entries.firstOrNull { it.workspaceCoordinatorId() == releasedId }
+            if (targetTab != null && targetTab != latestCurrentTab) {
+                mountedWebTabs = mountedWebTabs - targetTab
+            }
+        }
+    }
+
+    // Keep the Play-compliant dataSync Foreground Service synced with user preference & pinned workspaces
+    LaunchedEffect(appearance.isBackgroundKeepAliveEnabled, pinnedRamCount) {
+        if (appearance.isBackgroundKeepAliveEnabled && pinnedRamCount > 0) {
+            if (!WorkspaceKeepAliveService.userPausedKeepAlive) {
+                WorkspaceKeepAliveService.startOrUpdate(context)
+            }
+        } else {
+            WorkspaceKeepAliveService.stop(context)
+        }
+    }
     val isT3CodeBackActive = currentPulseTab == PulseTab.T3_CODE && (t3CanGoBack || t3PopupWebView != null)
     val isAiStudioWebBackActive = currentPulseTab == PulseTab.AI_STUDIO && aiStudioCanGoBack
     val isBrowserBackActive = currentPulseTab == PulseTab.BROWSER && activeBrowserTab.canGoBack
@@ -1248,49 +1306,6 @@ fun AntigravityPulseApp(
         }
     }
 
-    if (showAppearanceSheet) {
-        Scaffold(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(bg),
-            contentWindowInsets = WindowInsets.safeDrawing
-        ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                AppearanceSettingsSheet(
-                    settings = appearance,
-                    permissionsRefreshTick = permissionsRefreshTick,
-                    onUpdateSettings = onUpdateAppearance,
-                    onSelectPreset = onSelectPreset,
-                    onResetPreset = onResetPreset,
-                    onToggleAutoReconnect = antigravityViewModel::setAutoReconnectEnabled,
-                    onRequestNotificationPermission = { requestNotificationPermissionIfNeeded(false) },
-                    onSendTestNotification = { requestNotificationPermissionIfNeeded(true) },
-                    onRequestRuntimePermissions = { permissionsToRequest ->
-                        if (permissionsToRequest.isNotEmpty()) {
-                            runtimePermissionsLauncher.launch(permissionsToRequest)
-                        }
-                    },
-                    onOpenAppSystemSettings = {
-                        try {
-                            val appSettingsIntent = Intent(
-                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                Uri.fromParts("package", context.packageName, null)
-                            )
-                            context.startActivity(appSettingsIntent)
-                        } catch (_: Exception) {
-                        }
-                    },
-                    onClose = { showAppearanceSheet = false }
-                )
-            }
-        }
-        return
-    }
-
     val panelTabs = PulseTab.entries.mapIndexed { idx, tab ->
         FloatingPanelTabItem(
             index = idx,
@@ -1300,11 +1315,17 @@ fun AntigravityPulseApp(
         )
     }
 
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(bg)
-    ) {
+    val pinnedWorkspaceIds = remember(workspaceRamStatuses) {
+        workspaceRamStatuses.filter { it.isPinnedInRam }.map { it.id }.toSet()
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(bg)
+                .then(if (showAppearanceSheet) Modifier.clearAndSetSemantics {} else Modifier)
+        ) {
         val isWideScreen = maxWidth >= 720.dp
 
         Scaffold(
@@ -1313,10 +1334,11 @@ fun AntigravityPulseApp(
                 .background(bg),
             contentWindowInsets = WindowInsets.safeDrawing,
             topBar = {
+                val barAnimMs = if (smoothAnimations) 160 else 0
                 AnimatedVisibility(
                     visible = !isBarsHidden,
-                    enter = slideInVertically(animationSpec = tween(150), initialOffsetY = { -it }) + fadeIn(tween(150)),
-                    exit = slideOutVertically(animationSpec = tween(150), targetOffsetY = { -it }) + fadeOut(tween(150))
+                    enter = slideInVertically(animationSpec = tween(barAnimMs), initialOffsetY = { -it }) + fadeIn(tween(barAnimMs)),
+                    exit = slideOutVertically(animationSpec = tween(barAnimMs), targetOffsetY = { -it }) + fadeOut(tween(barAnimMs))
                 ) {
                     Column(
                         modifier = Modifier
@@ -1360,10 +1382,11 @@ fun AntigravityPulseApp(
                 }
             },
             bottomBar = {
+                val barAnimMs = if (smoothAnimations) 160 else 0
                 AnimatedVisibility(
                     visible = !isBarsHidden && !isWideScreen,
-                    enter = slideInVertically(animationSpec = tween(150), initialOffsetY = { it }) + fadeIn(tween(150)),
-                    exit = slideOutVertically(animationSpec = tween(150), targetOffsetY = { it }) + fadeOut(tween(150))
+                    enter = slideInVertically(animationSpec = tween(barAnimMs), initialOffsetY = { it }) + fadeIn(tween(barAnimMs)),
+                    exit = slideOutVertically(animationSpec = tween(barAnimMs), targetOffsetY = { it }) + fadeOut(tween(barAnimMs))
                 ) {
                     Column(
                         modifier = Modifier
@@ -1386,6 +1409,22 @@ fun AntigravityPulseApp(
                             PulseTab.entries.forEachIndexed { index, tab ->
                                 val selected = selectedTabIndex == index
                                 val labelText = stringResource(id = tab.shortTitleRes)
+                                val isLiveInRam = tab.workspaceCoordinatorId()?.let { it in pinnedWorkspaceIds } == true
+                                val pillBg by animateColorAsState(
+                                    targetValue = if (selected) accent.copy(alpha = 0.16f) else Color.Transparent,
+                                    animationSpec = tween(if (smoothAnimations) 160 else 0),
+                                    label = "nav_pill_bg_${tab.name}"
+                                )
+                                val itemTint by animateColorAsState(
+                                    targetValue = if (selected) accent else secondaryFg,
+                                    animationSpec = tween(if (smoothAnimations) 150 else 0),
+                                    label = "nav_item_tint_${tab.name}"
+                                )
+                                val iconScale by animateFloatAsState(
+                                    targetValue = if (selected) 1.08f else 1.0f,
+                                    animationSpec = tween(if (smoothAnimations) 150 else 0),
+                                    label = "nav_icon_scale_${tab.name}"
+                                )
                                 Column(
                                     modifier = Modifier
                                         .widthIn(min = 58.dp)
@@ -1400,26 +1439,37 @@ fun AntigravityPulseApp(
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(12.dp))
-                                            .background(
-                                                if (selected) accent.copy(alpha = 0.16f)
-                                                else Color.Transparent
-                                            )
+                                            .background(pillBg)
                                             .padding(horizontal = 12.dp, vertical = 3.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = tab.icon,
                                             contentDescription = stringResource(id = tab.titleRes),
-                                            tint = if (selected) accent else secondaryFg,
-                                            modifier = Modifier.size(20.dp)
+                                            tint = itemTint,
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .graphicsLayer {
+                                                    scaleX = iconScale
+                                                    scaleY = iconScale
+                                                }
                                         )
+                                        if (isLiveInRam && !selected) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .size(5.dp)
+                                                    .clip(CircleShape)
+                                                    .background(activeTheme.successColor)
+                                            )
+                                        }
                                     }
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
                                         text = labelText,
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                        color = if (selected) accent else secondaryFg,
+                                        color = itemTint,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -1486,139 +1536,179 @@ fun AntigravityPulseApp(
                         .background(bg)
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        if (statusBanner != null) {
-                            val bannerGreen = activeTheme.successColor
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 4.dp)
-                                    .frostedGlass(
-                                        shape = RoundedCornerShape(14.dp),
-                                        baseColor = if (activeTheme.isLightMode) surface else bannerGreen.copy(alpha = 0.18f),
-                                        tintColor = bannerGreen,
-                                        borderColor = bannerGreen,
-                                        enabled = activeTheme.isFrostedGlassEnabled,
-                                        fillAlpha = if (activeTheme.isLightMode) 0.94f else 0.26f,
-                                        tintAlpha = 0.10f,
-                                        borderAlpha = if (activeTheme.isLightMode) 0.65f else 0.45f
+                        AnimatedVisibility(
+                            visible = statusBanner != null,
+                            enter = if (smoothAnimations) {
+                                slideInVertically(tween(160), initialOffsetY = { -it / 2 }) + fadeIn(tween(140))
+                            } else {
+                                fadeIn(tween(0))
+                            },
+                            exit = if (smoothAnimations) {
+                                slideOutVertically(tween(120), targetOffsetY = { -it / 2 }) + fadeOut(tween(100))
+                            } else {
+                                fadeOut(tween(0))
+                            }
+                        ) {
+                            val bannerText = statusBanner
+                            if (bannerText != null) {
+                                val bannerGreen = activeTheme.successColor
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                                        .frostedGlass(
+                                            shape = RoundedCornerShape(14.dp),
+                                            baseColor = if (activeTheme.isLightMode) surface else bannerGreen.copy(alpha = 0.18f),
+                                            tintColor = bannerGreen,
+                                            borderColor = bannerGreen,
+                                            enabled = activeTheme.isFrostedGlassEnabled,
+                                            fillAlpha = if (activeTheme.isLightMode) 0.94f else 0.26f,
+                                            tintAlpha = 0.10f,
+                                            borderAlpha = if (activeTheme.isLightMode) 0.65f else 0.45f
+                                        )
+                                        .clickable { antigravityViewModel.clearBanner() }
+                                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                                        .testTag("status_feedback_banner"),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = bannerText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = bannerGreen,
+                                        modifier = Modifier.weight(1f)
                                     )
-                                    .clickable { antigravityViewModel.clearBanner() }
-                                    .padding(horizontal = 12.dp, vertical = 7.dp)
-                                    .testTag("status_feedback_banner"),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = statusBanner.orEmpty(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = bannerGreen,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    text = "Dismiss",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = fg
-                                )
+                                    Text(
+                                        text = "Dismiss",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = fg
+                                    )
+                                }
                             }
                         }
 
+                        // Window-Attached Lazy Workspace Stack: every opened WebView workspace remains
+                        // attached to the window permanently (zero detach, zero reload, 0ms switching).
                         Box(modifier = Modifier.weight(1f)) {
-                            val safeIndex = selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)
-                            when (PulseTab.entries[safeIndex]) {
-                                PulseTab.WEB_BRIDGE -> RetainedWebViewBridgeScreen(
-                                    telemetry = telemetry,
-                                    savedFallbackEndpoint = appearance.lastActiveRemoteUrl,
-                                    isFullscreenBarsHidden = isBarsHidden,
-                                    onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
-                                    onSaveAndConnectUrl = { cleanUrl ->
-                                        connectAndOpenRemoteHost(
-                                            hostName = activeProfile?.name ?: "Antigravity Remote",
-                                            url = cleanUrl,
-                                            token = activeProfile?.authToken.orEmpty()
-                                        )
-                                    },
-                                    onOpenHostSwitcher = { showServerModal = true },
-                                    onOpenQrScanner = { showGlobalQrScanner = true },
-                                    onOpenAiStudio = { selectedTabIndex = PulseTab.AI_STUDIO.ordinal },
-                                    onOpenT3Code = { selectedTabIndex = PulseTab.T3_CODE.ordinal },
-                                    onJsBridgeEvent = { eventMsg ->
-                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
-                                        if (appearance.isAppEventNotificationsEnabled &&
-                                            eventMsg.contains("SSL", ignoreCase = true)
-                                        ) {
-                                            PulseNotificationManager.showConnectionNotification(
-                                                context = context,
-                                                title = "Antigravity Security Warning",
-                                                body = eventMsg
+                            effectiveMountedWebTabs.forEach { tab ->
+                                val isSlotActive = !showAppearanceSheet && currentPulseTab == tab
+                                key(tab) {
+                                    KeepAliveWorkspaceSlot(
+                                        isActive = isSlotActive,
+                                        smoothAnimationsEnabled = smoothAnimations
+                                    ) {
+                                        when (tab) {
+                                            PulseTab.WEB_BRIDGE -> RetainedWebViewBridgeScreen(
+                                                telemetry = telemetry,
+                                                savedFallbackEndpoint = appearance.lastActiveRemoteUrl,
+                                                isFullscreenBarsHidden = isBarsHidden,
+                                                isWorkspaceActive = isSlotActive,
+                                                onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                                onSaveAndConnectUrl = { cleanUrl ->
+                                                    connectAndOpenRemoteHost(
+                                                        hostName = activeProfile?.name ?: "Antigravity Remote",
+                                                        url = cleanUrl,
+                                                        token = activeProfile?.authToken.orEmpty()
+                                                    )
+                                                },
+                                                onOpenHostSwitcher = { showServerModal = true },
+                                                onOpenQrScanner = { showGlobalQrScanner = true },
+                                                onOpenAiStudio = { selectedTabIndex = PulseTab.AI_STUDIO.ordinal },
+                                                onOpenT3Code = { selectedTabIndex = PulseTab.T3_CODE.ordinal },
+                                                onJsBridgeEvent = { eventMsg ->
+                                                    antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                                    if (appearance.isAppEventNotificationsEnabled &&
+                                                        eventMsg.contains("SSL", ignoreCase = true)
+                                                    ) {
+                                                        PulseNotificationManager.showConnectionNotification(
+                                                            context = context,
+                                                            title = "Antigravity Security Warning",
+                                                            body = eventMsg
+                                                        )
+                                                    }
+                                                }
                                             )
+
+                                            PulseTab.T3_CODE -> T3CodeWebScreen(
+                                                domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                                isFullscreenBarsHidden = isBarsHidden,
+                                                isWorkspaceActive = isSlotActive,
+                                                showEnvironmentsDialog = showT3EnvironmentsDialog,
+                                                onShowEnvironmentsDialogChange = { showT3EnvironmentsDialog = it },
+                                                onOpenT3QrScanner = { showT3QrScanner = true },
+                                                onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                                onStatusEvent = { eventMsg ->
+                                                    antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                                }
+                                            )
+
+                                            PulseTab.AI_STUDIO -> AiStudioWebScreen(
+                                                domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                                isFullscreenBarsHidden = isBarsHidden,
+                                                isWorkspaceActive = isSlotActive,
+                                                onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                                onStatusEvent = { eventMsg ->
+                                                    antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                                }
+                                            )
+
+                                            PulseTab.GEMINI,
+                                            PulseTab.GITHUB,
+                                            PulseTab.VERCEL,
+                                            PulseTab.SUPABASE -> {
+                                                val workspace = tab.devWorkspace!!
+                                                PinnedWebWorkspaceScreen(
+                                                    workspace = workspace,
+                                                    domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                                    isFullscreenBarsHidden = isBarsHidden,
+                                                    isWorkspaceActive = isSlotActive,
+                                                    onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                                    onStatusEvent = { eventMsg ->
+                                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                                    }
+                                                )
+                                            }
+
+                                            PulseTab.BROWSER -> PulseBrowserScreen(
+                                                domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                                isWorkspaceActive = isSlotActive,
+                                                onStatusEvent = { eventMsg ->
+                                                    antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                                }
+                                            )
+
+                                            PulseTab.STORAGE_SYNC -> Unit
                                         }
                                     }
-                                )
-
-                                PulseTab.T3_CODE -> T3CodeWebScreen(
-                                    domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
-                                    isFullscreenBarsHidden = isBarsHidden,
-                                    showEnvironmentsDialog = showT3EnvironmentsDialog,
-                                    onShowEnvironmentsDialogChange = { showT3EnvironmentsDialog = it },
-                                    onOpenT3QrScanner = { showT3QrScanner = true },
-                                    onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
-                                    onStatusEvent = { eventMsg ->
-                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
-                                    }
-                                )
-
-                                PulseTab.AI_STUDIO -> AiStudioWebScreen(
-                                    domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
-                                    isFullscreenBarsHidden = isBarsHidden,
-                                    onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
-                                    onStatusEvent = { eventMsg ->
-                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
-                                    }
-                                )
-
-                                PulseTab.GEMINI,
-                                PulseTab.GITHUB,
-                                PulseTab.VERCEL,
-                                PulseTab.SUPABASE -> {
-                                    val workspace = PulseTab.entries[safeIndex].devWorkspace!!
-                                    key(workspace) {
-                                        PinnedWebWorkspaceScreen(
-                                            workspace = workspace,
-                                            domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
-                                            isFullscreenBarsHidden = isBarsHidden,
-                                            onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
-                                            onStatusEvent = { eventMsg ->
-                                                antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
-                                            }
-                                        )
-                                    }
                                 }
+                            }
 
-                                PulseTab.BROWSER -> PulseBrowserScreen(
-                                    domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
-                                    onStatusEvent = { eventMsg ->
-                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
-                                    }
-                                )
-
-                                PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
-                                    dao = dao,
-                                    localProfiles = serverProfiles,
-                                    onConnectHostUrl = { name, endpointUrl, token ->
-                                        connectAndOpenRemoteHost(name, endpointUrl, token)
-                                    },
-                                    onInsertPromptIntoRemote = { promptText ->
-                                        antigravityViewModel.insertPromptIntoRemoteWebView(promptText)
-                                        selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
-                                    },
-                                    onOpenAddHostModal = { showServerModal = true },
-                                    onClearLocalData = {
-                                        performFullLocalSessionWipe(clearSavedUid = false)
-                                    },
-                                    onBeforeSignOut = {
-                                        performFullLocalSessionWipe(clearSavedUid = true)
-                                    }
-                                )
+                            if (currentPulseTab == PulseTab.STORAGE_SYNC) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .zIndex(2f)
+                                        .background(bg)
+                                ) {
+                                    StorageAndCloudSyncScreen(
+                                        dao = dao,
+                                        localProfiles = serverProfiles,
+                                        onConnectHostUrl = { name, endpointUrl, token ->
+                                            connectAndOpenRemoteHost(name, endpointUrl, token)
+                                        },
+                                        onInsertPromptIntoRemote = { promptText ->
+                                            antigravityViewModel.insertPromptIntoRemoteWebView(promptText)
+                                            selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
+                                        },
+                                        onOpenAddHostModal = { showServerModal = true },
+                                        onClearLocalData = {
+                                            performFullLocalSessionWipe(clearSavedUid = false)
+                                        },
+                                        onBeforeSignOut = {
+                                            performFullLocalSessionWipe(clearSavedUid = true)
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -1669,6 +1759,7 @@ fun AntigravityPulseApp(
                             browserTabCount = browserTabs.size,
                             isDesktopModeEnabled = activeDesktopMode,
                             domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                            pinnedRamCount = pinnedRamCount,
                             surface = surface,
                             elevated = elevated,
                             border = border,
@@ -1835,6 +1926,86 @@ fun AntigravityPulseApp(
                             onOpenSettings = { showAppearanceSheet = true }
                         )
                     }
+                }
+            }
+        }
+        }
+
+        // Settings rendered as an overlay so opening/closing Settings NEVER detaches any live WebView!
+        AnimatedVisibility(
+            visible = showAppearanceSheet,
+            enter = if (smoothAnimations) {
+                slideInVertically(tween(190), initialOffsetY = { it / 8 }) + fadeIn(tween(150))
+            } else {
+                fadeIn(tween(0))
+            },
+            exit = if (smoothAnimations) {
+                slideOutVertically(tween(150), targetOffsetY = { it / 8 }) + fadeOut(tween(120))
+            } else {
+                fadeOut(tween(0))
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(10f)
+        ) {
+            Scaffold(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(bg),
+                contentWindowInsets = WindowInsets.safeDrawing
+            ) { innerPadding ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    AppearanceSettingsSheet(
+                        settings = appearance,
+                        permissionsRefreshTick = permissionsRefreshTick,
+                        onUpdateSettings = onUpdateAppearance,
+                        onSelectPreset = onSelectPreset,
+                        onResetPreset = onResetPreset,
+                        onToggleAutoReconnect = antigravityViewModel::setAutoReconnectEnabled,
+                        onToggleBackgroundKeepAlive = { enabled ->
+                            if (enabled) {
+                                WorkspaceKeepAliveService.startOrUpdate(context)
+                                antigravityViewModel.recordWebViewBridgeEvent("1+ Hour RAM Keep-Alive enabled.")
+                            } else {
+                                WorkspaceKeepAliveService.stop(context)
+                                antigravityViewModel.recordWebViewBridgeEvent("Background RAM Keep-Alive paused.")
+                            }
+                        },
+                        onReleaseWorkspaceFromRam = { workspaceId ->
+                            WorkspaceMemoryKeepAliveCoordinator.releaseWorkspaceFromRam(workspaceId)
+                            antigravityViewModel.recordWebViewBridgeEvent("Released workspace RAM (state saved for instant resume).")
+                        },
+                        onOpenBatterySettings = {
+                            val opened = WorkspaceMemoryKeepAliveCoordinator.openBatteryOptimizationSettings(context)
+                            if (opened) {
+                                permissionsRefreshTick += 1
+                            } else {
+                                antigravityViewModel.recordWebViewBridgeEvent("Open Android Settings -> Apps -> Antigravity Pulse -> Battery -> Unrestricted.")
+                            }
+                        },
+                        onRequestNotificationPermission = { requestNotificationPermissionIfNeeded(false) },
+                        onSendTestNotification = { requestNotificationPermissionIfNeeded(true) },
+                        onRequestRuntimePermissions = { permissionsToRequest ->
+                            if (permissionsToRequest.isNotEmpty()) {
+                                runtimePermissionsLauncher.launch(permissionsToRequest)
+                            }
+                        },
+                        onOpenAppSystemSettings = {
+                            try {
+                                val appSettingsIntent = Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", context.packageName, null)
+                                )
+                                context.startActivity(appSettingsIntent)
+                            } catch (_: Exception) {
+                            }
+                        },
+                        onClose = { showAppearanceSheet = false }
+                    )
                 }
             }
         }
@@ -2080,6 +2251,36 @@ fun AntigravityPulseApp(
             },
             onDismiss = { showT3QrScanner = false }
         )
+    }
+}
+
+/**
+ * Window-attached workspace slot that keeps an opened WebView permanently mounted in the
+ * Android View hierarchy while switching tabs. Inactive slots drop immediately to `zIndex(0f)`
+ * with `alpha = 0f` and cleared accessibility semantics; the newly active slot performs a
+ * lightweight GPU-only fade-in without ever changing WebView layout bounds or triggering reloads.
+ */
+@Composable
+private fun KeepAliveWorkspaceSlot(
+    isActive: Boolean,
+    smoothAnimationsEnabled: Boolean,
+    content: @Composable () -> Unit
+) {
+    val slotAlpha by animateFloatAsState(
+        targetValue = if (isActive) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = if (smoothAnimationsEnabled && isActive) 130 else 0
+        ),
+        label = "workspace_slot_alpha"
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(if (isActive) 1f else 0f)
+            .graphicsLayer { alpha = slotAlpha }
+            .then(if (isActive) Modifier else Modifier.clearAndSetSemantics {})
+    ) {
+        content()
     }
 }
 

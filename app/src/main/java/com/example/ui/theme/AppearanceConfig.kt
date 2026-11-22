@@ -139,7 +139,9 @@ data class AppearanceSettings(
     val isFrostedGlassEnabled: Boolean = true,
     val isAppEventNotificationsEnabled: Boolean = true,
     val isNotifyOnlyInBackground: Boolean = false,
-    val lastSignedInUid: String = ""
+    val lastSignedInUid: String = "",
+    val isBackgroundKeepAliveEnabled: Boolean = true,
+    val isSmoothAnimationsEnabled: Boolean = true
 ) {
     val developerName: String get() = DeveloperAttribution.NAME
     val developerEmail: String get() = DeveloperAttribution.EMAIL
@@ -399,7 +401,9 @@ class AppearancePreferencesManager(context: Context) {
             isFrostedGlassEnabled = prefs.getBoolean("frosted_glass_enabled", true),
             isAppEventNotificationsEnabled = prefs.getBoolean("app_event_notifications_enabled", true),
             isNotifyOnlyInBackground = prefs.getBoolean("notify_only_in_background", false),
-            lastSignedInUid = prefs.getString("last_signed_in_uid", "") ?: ""
+            lastSignedInUid = prefs.getString("last_signed_in_uid", "") ?: "",
+            isBackgroundKeepAliveEnabled = prefs.getBoolean("background_keep_alive_enabled", true),
+            isSmoothAnimationsEnabled = prefs.getBoolean("smooth_animations_enabled", true)
         )
     }
 
@@ -436,6 +440,8 @@ class AppearancePreferencesManager(context: Context) {
             .putBoolean("app_event_notifications_enabled", next.isAppEventNotificationsEnabled)
             .putBoolean("notify_only_in_background", next.isNotifyOnlyInBackground)
             .putString("last_signed_in_uid", next.lastSignedInUid)
+            .putBoolean("background_keep_alive_enabled", next.isBackgroundKeepAliveEnabled)
+            .putBoolean("smooth_animations_enabled", next.isSmoothAnimationsEnabled)
             .apply()
     }
 

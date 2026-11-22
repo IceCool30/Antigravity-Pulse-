@@ -79,6 +79,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.RetainedWebViewManager
 import com.example.data.remote.T3CodePinnedWebViewManager
 import com.example.data.remote.T3EnvironmentProfile
+import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppearanceSettings
@@ -98,6 +99,7 @@ import com.example.ui.theme.LocalAppearanceSettings
 fun T3CodeWebScreen(
     domLagBoosterEnabled: Boolean,
     isFullscreenBarsHidden: Boolean,
+    isWorkspaceActive: Boolean = true,
     showEnvironmentsDialog: Boolean = false,
     onShowEnvironmentsDialogChange: (Boolean) -> Unit = {},
     onOpenT3QrScanner: () -> Unit = {},
@@ -445,9 +447,12 @@ fun T3CodeWebScreen(
                             context = ctx,
                             domLagBooster = domLagBoosterEnabled,
                             onPageEvent = onStatusEvent
-                        )
+                        ).also { wv ->
+                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
+                        }
                     },
-                    update = { _ ->
+                    update = { wv ->
+                        WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
                         T3CodePinnedWebViewManager.applyLagBooster(domLagBoosterEnabled)
                     }
                 )

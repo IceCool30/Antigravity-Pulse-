@@ -38,6 +38,8 @@ object PulseNotificationManager {
     const val CHANNEL_AGENT_EVENTS = "antigravity_agent_events"
     const val CHANNEL_CONNECTION_STATUS = "antigravity_connection_status"
     const val CHANNEL_APP_ACTIVITY = "antigravity_app_activity"
+    const val CHANNEL_WORKSPACE_KEEP_ALIVE = "antigravity_workspace_keep_alive"
+    const val KEEP_ALIVE_NOTIFICATION_ID = 1050
 
     private const val MAX_TITLE_CHARS = 120
     private const val MAX_BODY_CHARS = 360
@@ -109,8 +111,19 @@ object PulseNotificationManager {
             setShowBadge(false)
         }
 
+        val keepAliveChannel = NotificationChannel(
+            CHANNEL_WORKSPACE_KEEP_ALIVE,
+            "Workspace RAM Keep-Alive",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Silent ongoing indicator that keeps your open developer workspaces pinned in memory without reloading."
+            setShowBadge(false)
+            enableVibration(false)
+            setSound(null, null)
+        }
+
         manager.createNotificationChannels(
-            listOf(agentChannel, connectionChannel, activityChannel)
+            listOf(agentChannel, connectionChannel, activityChannel, keepAliveChannel)
         )
     }
 
@@ -254,6 +267,65 @@ object PulseNotificationManager {
             tag = "pulse_test_notification",
             stableId = 1099
         )
+    }
+
+    /**
+     * Builds the silent ongoing notification for [com.example.service.WorkspaceKeepAliveService]
+     * so Android keeps the process and all open Chromium WebView renderers pinned in RAM for 1+ hour.
+     */
+    fun buildKeepAliveNotification(
+        context: Context,
+        pinnedCount: Int,
+        workspaceSummary: String,
+        stopPendingIntent: PendingIntent
+    ): android.app.Notification {
+        val appContext = context.applicationContext
+        ensureChannelsCreated(appContext)
+
+        val launchIntent = Intent(appContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val contentIntent = PendingIntent.getActivity(
+            appContext,
+            KEEP_ALIVE_NOTIFICATION_ID,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val safeCount = pinnedCount.coerceAtLeast(1)
+        val title = if (safeCount == 1) {
+            "1 Workspace Pinned in RAM"
+        } else {
+            "$safeCount Workspaces Pinned in RAM"
+        }
+        val body = if (workspaceSummary.isNotBlank()) {
+            "$workspaceSummary • Active without reloading"
+        } else {
+            "Keeping open developer tabs live in memory"
+        }
+
+        val publicVersion = NotificationCompat.Builder(appContext, CHANNEL_WORKSPACE_KEEP_ALIVE)
+            .setSmallIcon(R.drawable.ic_pulse_notification)
+            .setContentTitle("Antigravity Pulse")
+            .setContentText("Workspaces pinned in memory")
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+
+        return NotificationCompat.Builder(appContext, CHANNEL_WORKSPACE_KEEP_ALIVE)
+            .setSmallIcon(R.drawable.ic_pulse_notification)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
+            .setOngoing(true)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setContentIntent(contentIntent)
+            .addAction(0, "Pause Keep-Alive", stopPendingIntent)
+            .build()
     }
 
     private fun postNotification(

@@ -5,8 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -25,6 +27,18 @@ data class WebViewContinuityState(
     val showingSnapshotShield: Boolean = false,
     val cachedSnapshot: Bitmap? = null,
     val statusMessage: String = ""
+)
+
+/**
+ * In-RAM Tier-2 recovery snapshot capturing a WebView's full Back/Forward navigation stack,
+ * active URL, and viewport scroll coordinates so even if Android's Low Memory Killer evicts
+ * an individual Chromium renderer under extreme device pressure, the tab resumes seamlessly.
+ */
+data class WebViewStateBackup(
+    val bundle: Bundle,
+    val scrollX: Int,
+    val scrollY: Int,
+    val url: String
 )
 
 /**
@@ -190,6 +204,131 @@ object WebViewOfflineCacheHelper {
             caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
         } catch (_: Exception) {
             true
+        }
+    }
+
+    /**
+     * Toggles a Window-attached WebView between active foreground and hidden RAM-pinned state
+     * WITHOUT ever detaching it from the Window (`removeView`), preventing `onDetachedFromWindow`
+     * tear-downs, WebSocket drops, and Chromium compositor reloads while strictly blocking
+     * stray touches, focus, and IME keyboard input on hidden tabs.
+     */
+    fun applyWindowAttachedVisibility(webView: WebView, isActive: Boolean) {
+        try {
+            val targetVisibility = if (isActive) View.VISIBLE else View.INVISIBLE
+            if (webView.visibility != targetVisibility) {
+                webView.visibility = targetVisibility
+            }
+            if (webView.isEnabled != isActive) {
+                webView.isEnabled = isActive
+            }
+            if (webView.isFocusable != isActive) {
+                webView.isFocusable = isActive
+            }
+            if (webView.isFocusableInTouchMode != isActive) {
+                webView.isFocusableInTouchMode = isActive
+            }
+            val targetA11y = if (isActive) {
+                View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+            } else {
+                View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            }
+            if (webView.importantForAccessibility != targetA11y) {
+                webView.importantForAccessibility = targetA11y
+            }
+            if (!isActive && webView.hasFocus()) {
+                webView.clearFocus()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Captures the WebView's Back/Forward state bundle and scroll offsets without interrupting
+     * rendering or reloading. Must be invoked on the main thread (or via [runOnMainThread]).
+     */
+    fun captureStateBackup(webView: WebView?): WebViewStateBackup? {
+        val target = webView ?: return null
+        return try {
+            val liveUrl = target.url.orEmpty()
+            if (liveUrl.isBlank() ||
+                liveUrl.startsWith("about:", ignoreCase = true) ||
+                liveUrl.startsWith("chrome-error:", ignoreCase = true) ||
+                !RetainedWebViewManager.isSafeHttpUrl(liveUrl)
+            ) {
+                return null
+            }
+            val bundle = Bundle()
+            target.saveState(bundle)
+            WebViewStateBackup(
+                bundle = bundle,
+                scrollX = target.scrollX.coerceAtLeast(0),
+                scrollY = target.scrollY.coerceAtLeast(0),
+                url = liveUrl
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Restores a previously captured [WebViewStateBackup] (full navigation stack) or falls back
+     * directly to [fallbackUrl] if no valid bundle exists.
+     */
+    fun restoreStateBackupOrLoad(
+        webView: WebView,
+        backup: WebViewStateBackup?,
+        fallbackUrl: String
+    ): Boolean {
+        if (backup != null && !backup.bundle.isEmpty) {
+            try {
+                val restoredList = webView.restoreState(backup.bundle)
+                if (restoredList != null && restoredList.size > 0) {
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
+        val targetUrl = backup?.url?.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
+            ?: fallbackUrl.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
+            ?: return false
+        try {
+            webView.loadUrl(targetUrl)
+        } catch (_: Exception) {
+        }
+        return false
+    }
+
+    fun restoreScrollOffset(webView: WebView?, scrollX: Int, scrollY: Int) {
+        val target = webView ?: return
+        if (scrollX <= 0 && scrollY <= 0) return
+        runOnMainThread(delayMs = 280L) {
+            try {
+                target.scrollTo(scrollX.coerceAtLeast(0), scrollY.coerceAtLeast(0))
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Lightweight, zero-reload periodic heartbeat that keeps Chromium's JS timers and V8 isolate
+     * warm for hidden pinned tabs so SPAs remain responsive after 1+ hour in RAM.
+     */
+    fun dispatchKeepAliveHeartbeat(webView: WebView?) {
+        val target = webView ?: return
+        runOnMainThread {
+            try {
+                target.onResume()
+                target.resumeTimers()
+                val liveUrl = target.url.orEmpty()
+                if (liveUrl.isNotBlank() && RetainedWebViewManager.isSafeHttpUrl(liveUrl)) {
+                    target.evaluateJavascript(
+                        "(function(){try{window.__agPulseKeepAliveAt=Date.now();}catch(e){}})();",
+                        null
+                    )
+                }
+            } catch (_: Exception) {
+            }
         }
     }
 }

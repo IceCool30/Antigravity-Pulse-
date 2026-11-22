@@ -67,6 +67,9 @@ fun AppearanceSettingsSheet(
     onSelectPreset: (AntigravityThemePreset) -> Unit,
     onResetPreset: () -> Unit,
     onToggleAutoReconnect: (Boolean) -> Unit = {},
+    onToggleBackgroundKeepAlive: (Boolean) -> Unit = {},
+    onReleaseWorkspaceFromRam: (String) -> Unit = {},
+    onOpenBatterySettings: () -> Unit = {},
     onRequestNotificationPermission: () -> Unit = {},
     onSendTestNotification: () -> Unit = {},
     onRequestRuntimePermissions: (Array<String>) -> Unit = {},
@@ -403,7 +406,27 @@ fun AppearanceSettingsSheet(
                     }
                 }
 
-                // SECTION 2: Security & Automation
+                // SECTION 2: Memory & Keep-Alive (1+ Hour Multi-Workspace Retention + Smooth UI Motion)
+                item(key = "section_memory_keep_alive_$permissionsRefreshTick") {
+                    SettingsKeepAliveSection(
+                        settings = settings,
+                        permissionsRefreshTick = permissionsRefreshTick,
+                        bg = bg,
+                        surface = surface,
+                        elevated = elevated,
+                        border = border,
+                        fg = fg,
+                        secondaryFg = secondaryFg,
+                        accent = accent,
+                        isFrostedGlass = isFrostedGlass,
+                        onUpdateSettings = onUpdateSettings,
+                        onToggleBackgroundKeepAlive = onToggleBackgroundKeepAlive,
+                        onReleaseWorkspaceFromRam = onReleaseWorkspaceFromRam,
+                        onOpenBatterySettings = onOpenBatterySettings
+                    )
+                }
+
+                // SECTION 3: Security & Automation
                 item(key = "section_security") {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         SettingsSectionHeader(

@@ -77,6 +77,15 @@ object RetainedWebViewManager {
 
     private var lastGoodUrl: String = ""
     private var mainFrameFailedInCurrentLoad: Boolean = false
+    private var savedStateBackup: WebViewStateBackup? = null
+    private var pendingRestoreScroll: Pair<Int, Int>? = null
+    private var pinnedSinceElapsedMs: Long = 0L
+
+    fun isPinnedInRam(): Boolean = pinnedWebView != null
+
+    fun pinnedSinceElapsedMs(): Long = pinnedSinceElapsedMs
+
+    fun hasStateBackup(): Boolean = savedStateBackup != null
 
     private fun updateActiveEndpoint(endpoint: String) {
         lastLoadedEndpoint = endpoint
@@ -482,9 +491,40 @@ object RetainedWebViewManager {
      */
     fun keepTimersRunning() {
         try {
+            pinnedWebView?.onResume()
             pinnedWebView?.resumeTimers()
         } catch (_: Exception) {
         }
+    }
+
+    fun dispatchKeepAliveHeartbeat() {
+        WebViewOfflineCacheHelper.dispatchKeepAliveHeartbeat(pinnedWebView)
+        flushCookies()
+    }
+
+    fun saveStateBackup() {
+        val wv = pinnedWebView ?: return
+        WebViewOfflineCacheHelper.runOnMainThread {
+            WebViewOfflineCacheHelper.captureStateBackup(wv)?.let { savedStateBackup = it }
+        }
+    }
+
+    fun releaseFromRam() {
+        val oldView = pinnedWebView ?: return
+        saveStateBackup()
+        pinnedWebView = null
+        pinnedSinceElapsedMs = 0L
+        lastLoadedEndpoint = "__UNINITIALIZED__"
+        WebViewOfflineCacheHelper.runOnMainThread {
+            try {
+                oldView.stopLoading()
+                (oldView.parent as? ViewGroup)?.removeView(oldView)
+                oldView.destroy()
+            } catch (_: Exception) {
+            }
+        }
+        _rendererGeneration.value = _rendererGeneration.value + 1
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     fun buildCleanMobileUserAgent(rawUserAgent: String): String {
@@ -523,8 +563,9 @@ object RetainedWebViewManager {
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    // Prioritize visible renderer while allowing safe downgrade when backgrounded
-                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
+                    // Keep renderer at IMPORTANT priority even when switching tabs or backgrounding
+                    // so Android's LMKD does not evict hidden sessions after 1+ hour.
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
                 } catch (_: Exception) {
                 }
             }
@@ -720,7 +761,14 @@ object RetainedWebViewManager {
                             statusMessage = if (wasRecovering) "Back online • Updated to latest" else ""
                         )
                         injectWebNotificationBridge(view, url)
-                        view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
+                        pendingRestoreScroll?.let { (sx, sy) ->
+                            pendingRestoreScroll = null
+                            WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
+                        }
+                        view?.postDelayed({
+                            captureLatestSnapshotIfHealthy(view)
+                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { savedStateBackup = it }
+                        }, 650L)
                     }
                     if (!isErrorPage) {
                         injectMobileLayoutFix(view)
@@ -740,6 +788,7 @@ object RetainedWebViewManager {
                     if (pinnedWebView === crashedView) {
                         pinnedWebView = null
                     }
+                    pinnedSinceElapsedMs = 0L
                     lastLoadedEndpoint = "__UNINITIALIZED__"
                     WebViewOfflineCacheHelper.runOnMainThread {
                         try {
@@ -749,17 +798,28 @@ object RetainedWebViewManager {
                         }
                     }
                     _rendererGeneration.value = _rendererGeneration.value + 1
-                    onJsBridgeMessage("WebView renderer recovered automatically.")
+                    WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
+                    onJsBridgeMessage("Remote renderer recovered automatically at your last page.")
                     return true
                 }
             }
             pinnedWebView = this
+            pinnedSinceElapsedMs = android.os.SystemClock.elapsedRealtime()
+            WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
         }
 
         (webView.parent as? ViewGroup)?.removeView(webView)
 
         val cleanEndpoint = endpointUrl.trim()
+        val recoveryTarget = lastGoodUrl.takeIf { isSafeHttpUrl(it) } ?: cleanEndpoint
         when {
+            lastLoadedEndpoint == "__UNINITIALIZED__" && savedStateBackup != null && isSafeHttpUrl(recoveryTarget) -> {
+                val backup = savedStateBackup
+                pendingRestoreScroll = backup?.let { it.scrollX to it.scrollY }
+                updateActiveEndpoint(recoveryTarget)
+                mainFrameFailedInCurrentLoad = false
+                WebViewOfflineCacheHelper.restoreStateBackupOrLoad(webView, backup, recoveryTarget)
+            }
             isSafeHttpUrl(cleanEndpoint) -> {
                 if (lastLoadedEndpoint != cleanEndpoint) {
                     updateActiveEndpoint(cleanEndpoint)
@@ -841,8 +901,12 @@ object RetainedWebViewManager {
         }
         _continuityState.value = WebViewContinuityState()
         _canGoBackState.value = false
+        savedStateBackup = null
+        pendingRestoreScroll = null
+        pinnedSinceElapsedMs = 0L
         _rendererGeneration.value = _rendererGeneration.value + 1
         resetToWelcomeScreen()
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     fun reloadOrForceLoadUrl(url: String, domLagBooster: Boolean) {

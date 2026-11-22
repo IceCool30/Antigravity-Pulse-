@@ -50,6 +50,7 @@ data class PulseBrowserTabState(
 )
 
 val ConnectedAppBrowserLinks: List<BrowserQuickLink> = listOf(
+    BrowserQuickLink("t3_code", "T3 Code", "app.t3.codes", "https://app.t3.codes/"),
     BrowserQuickLink("ai_studio", "AI Studio", "aistudio.google.com", "https://aistudio.google.com/prompts/new_chat"),
     BrowserQuickLink("gemini", "Gemini", "gemini.google.com", "https://gemini.google.com/app"),
     BrowserQuickLink("github", "GitHub", "github.com", "https://github.com/"),
@@ -70,6 +71,9 @@ object PulseBrowserManager {
     private val tabDefaultUserAgents = mutableMapOf<String, String>()
     private val tabLastGoodUrls = mutableMapOf<String, String>()
     private val tabMainFrameFailed = mutableMapOf<String, Boolean>()
+    private val tabStateBackups = mutableMapOf<String, WebViewStateBackup>()
+    private val tabPendingRestoreScroll = mutableMapOf<String, Pair<Int, Int>>()
+    private var pinnedSinceElapsedMs: Long = 0L
     private var domLagBoosterActive: Boolean = true
 
     private val initialTab = PulseBrowserTabState(id = "tab_1")
@@ -143,6 +147,11 @@ object PulseBrowserManager {
         tabDefaultUserAgents.remove(tabId)
         tabLastGoodUrls.remove(tabId)
         tabMainFrameFailed.remove(tabId)
+        tabStateBackups.remove(tabId)
+        tabPendingRestoreScroll.remove(tabId)
+        if (tabWebViews.isEmpty()) {
+            pinnedSinceElapsedMs = 0L
+        }
         if (wv != null) {
             WebViewOfflineCacheHelper.runOnMainThread {
                 try {
@@ -153,6 +162,7 @@ object PulseBrowserManager {
                 }
             }
         }
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     private fun updateTab(tabId: String, transform: (PulseBrowserTabState) -> PulseBrowserTabState) {
@@ -405,6 +415,14 @@ object PulseBrowserManager {
         }
     }
 
+    fun pinnedTabCount(): Int = tabWebViews.size
+
+    fun isPinnedInRam(): Boolean = tabWebViews.isNotEmpty()
+
+    fun pinnedSinceElapsedMs(): Long = pinnedSinceElapsedMs
+
+    fun hasAnyStateBackup(): Boolean = tabStateBackups.isNotEmpty()
+
     fun keepTimersRunningAll() {
         tabWebViews.values.forEach { wv ->
             try {
@@ -420,6 +438,42 @@ object PulseBrowserManager {
             CookieManager.getInstance().flush()
         } catch (_: Exception) {
         }
+    }
+
+    fun dispatchKeepAliveHeartbeatAll() {
+        tabWebViews.values.forEach { wv ->
+            WebViewOfflineCacheHelper.dispatchKeepAliveHeartbeat(wv)
+        }
+        flushCookiesAll()
+    }
+
+    fun saveAllStateBackups() {
+        val entries = tabWebViews.entries.toList()
+        if (entries.isEmpty()) return
+        WebViewOfflineCacheHelper.runOnMainThread {
+            entries.forEach { (tabId, wv) ->
+                WebViewOfflineCacheHelper.captureStateBackup(wv)?.let { tabStateBackups[tabId] = it }
+            }
+        }
+    }
+
+    fun releaseAllTabsFromRam() {
+        saveAllStateBackups()
+        val entries = tabWebViews.entries.toList()
+        tabWebViews.clear()
+        pinnedSinceElapsedMs = 0L
+        entries.forEach { (tabId, wv) ->
+            WebViewOfflineCacheHelper.runOnMainThread {
+                try {
+                    wv.stopLoading()
+                    (wv.parent as? ViewGroup)?.removeView(wv)
+                    wv.destroy()
+                } catch (_: Exception) {
+                }
+            }
+            updateTab(tabId) { it.copy(rendererGeneration = it.rendererGeneration + 1) }
+        }
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     fun applyLagBooster(tabId: String, enabled: Boolean) {
@@ -488,8 +542,12 @@ object PulseBrowserManager {
         } catch (_: Exception) {
         }
         val fresh = PulseBrowserTabState(id = "tab_${tabCounter.incrementAndGet()}")
+        tabStateBackups.clear()
+        tabPendingRestoreScroll.clear()
+        pinnedSinceElapsedMs = 0L
         _tabs.value = listOf(fresh)
         _activeTabId.value = fresh.id
+        WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -519,7 +577,7 @@ object PulseBrowserManager {
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
                 } catch (_: Exception) {
                 }
             }
@@ -725,7 +783,13 @@ object PulseBrowserManager {
                                 )
                             )
                         }
-                        view?.postDelayed({ captureSnapshotIfHealthy(tabId, view) }, 650L)
+                        tabPendingRestoreScroll.remove(tabId)?.let { (sx, sy) ->
+                            WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
+                        }
+                        view?.postDelayed({
+                            captureSnapshotIfHealthy(tabId, view)
+                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { tabStateBackups[tabId] = it }
+                        }, 650L)
                     } else {
                         updateTab(tabId) { it.copy(loadProgress = 100) }
                     }
@@ -746,6 +810,9 @@ object PulseBrowserManager {
                     if (tabWebViews[tabId] === crashedView) {
                         tabWebViews.remove(tabId)
                     }
+                    if (tabWebViews.isEmpty()) {
+                        pinnedSinceElapsedMs = 0L
+                    }
                     WebViewOfflineCacheHelper.runOnMainThread {
                         try {
                             (crashedView?.parent as? ViewGroup)?.removeView(crashedView)
@@ -754,19 +821,32 @@ object PulseBrowserManager {
                         }
                     }
                     updateTab(tabId) { it.copy(rendererGeneration = it.rendererGeneration + 1) }
-                    onPageEvent("Browser tab renderer recovered automatically.")
+                    WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
+                    onPageEvent("Browser tab renderer recovered at your last page.")
                     return true
                 }
             }
 
+            if (tabWebViews.isEmpty()) {
+                pinnedSinceElapsedMs = android.os.SystemClock.elapsedRealtime()
+            }
             tabWebViews[tabId] = this
+            WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
         }
 
         (webView.parent as? ViewGroup)?.removeView(webView)
 
         val currentUrl = tabState.url
         if (currentUrl.isNotBlank() && webView.url.isNullOrBlank()) {
-            webView.loadUrl(currentUrl)
+            val backup = tabStateBackups[tabId]
+            val fallbackUrl = tabLastGoodUrls[tabId]?.takeIf { RetainedWebViewManager.isSafeHttpUrl(it) }
+                ?: currentUrl
+            if (backup != null) {
+                tabPendingRestoreScroll[tabId] = backup.scrollX to backup.scrollY
+                WebViewOfflineCacheHelper.restoreStateBackupOrLoad(webView, backup, fallbackUrl)
+            } else {
+                webView.loadUrl(fallbackUrl)
+            }
         } else {
             applyLagBooster(tabId, domLagBooster)
         }

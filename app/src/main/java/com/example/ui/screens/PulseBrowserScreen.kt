@@ -58,9 +58,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -68,10 +70,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.ConnectedAppBrowserLinks
 import com.example.data.remote.PulseBrowserManager
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
@@ -84,6 +88,7 @@ import com.example.ui.theme.frostedGlass
 @Composable
 fun PulseBrowserScreen(
     domLagBoosterEnabled: Boolean,
+    isWorkspaceActive: Boolean = true,
     onStatusEvent: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -374,7 +379,7 @@ fun PulseBrowserScreen(
             )
         }
 
-        // Main Content: Speed Dial New Tab OR Live Keyed RAM-Pinned WebView
+        // Main Content: Persistent Window-Attached Multi-Tab WebView Stack + Speed Dial overlay
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -382,44 +387,78 @@ fun PulseBrowserScreen(
                 .background(bg)
                 .testTag("browser_viewport_container")
         ) {
-            if (activeTab.url.isBlank()) {
-                BrowserSpeedDialHome(
-                    surface = surface,
-                    elevated = elevated,
-                    border = border,
-                    fg = fg,
-                    secondaryFg = secondaryFg,
-                    accent = accent,
-                    isFrostedGlass = isFrostedGlass,
-                    onOpenUrl = { url ->
-                        addressInput = url
-                        PulseBrowserManager.navigateActiveTab(url)
-                    }
-                )
-            } else {
-                key(activeTab.id, activeTab.rendererGeneration) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            PulseBrowserManager.obtainWebViewForTab(
-                                context = ctx,
-                                tabId = activeTab.id,
-                                domLagBooster = domLagBoosterEnabled,
-                                onPageEvent = onStatusEvent
+            // Keep every navigated browser tab permanently attached to the window so switching
+            // between tabs never detaches, throttles, or reloads any background tab.
+            tabs.filter { it.url.isNotBlank() }.forEach { tab ->
+                val isTabActive = tab.id == activeTab.id
+                val shouldBeVisible = isTabActive && isWorkspaceActive
+                key(tab.id, tab.rendererGeneration) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(if (isTabActive) 1f else 0f)
+                            .graphicsLayer { alpha = if (isTabActive) 1f else 0f }
+                            .then(
+                                if (isTabActive) Modifier else Modifier.clearAndSetSemantics {}
                             )
-                        },
-                        update = { _ ->
-                            PulseBrowserManager.applyLagBooster(activeTab.id, domLagBoosterEnabled)
+                    ) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                PulseBrowserManager.obtainWebViewForTab(
+                                    context = ctx,
+                                    tabId = tab.id,
+                                    domLagBooster = domLagBoosterEnabled,
+                                    onPageEvent = onStatusEvent
+                                ).also { wv ->
+                                    WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, shouldBeVisible)
+                                }
+                            },
+                            update = { wv ->
+                                WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, shouldBeVisible)
+                                if (isTabActive) {
+                                    PulseBrowserManager.applyLagBooster(tab.id, domLagBoosterEnabled)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+
+            if (activeTab.url.isBlank()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(2f)
+                        .background(bg)
+                ) {
+                    BrowserSpeedDialHome(
+                        surface = surface,
+                        elevated = elevated,
+                        border = border,
+                        fg = fg,
+                        secondaryFg = secondaryFg,
+                        accent = accent,
+                        isFrostedGlass = isFrostedGlass,
+                        onOpenUrl = { url ->
+                            addressInput = url
+                            PulseBrowserManager.navigateActiveTab(url)
                         }
                     )
                 }
-
-                OfflineContinuityOverlay(
-                    continuity = activeTab.continuityState,
-                    workspaceLabel = activeTab.title.ifBlank { "Browser" },
-                    onRetryOrReloadLatest = { PulseBrowserManager.reloadOrRetryActiveTab() },
-                    onDismissRestoredBanner = { PulseBrowserManager.dismissActiveRestoredBanner() }
-                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(2f)
+                ) {
+                    OfflineContinuityOverlay(
+                        continuity = activeTab.continuityState,
+                        workspaceLabel = activeTab.title.ifBlank { "Browser" },
+                        onRetryOrReloadLatest = { PulseBrowserManager.reloadOrRetryActiveTab() },
+                        onDismissRestoredBanner = { PulseBrowserManager.dismissActiveRestoredBanner() }
+                    )
+                }
             }
         }
     }
