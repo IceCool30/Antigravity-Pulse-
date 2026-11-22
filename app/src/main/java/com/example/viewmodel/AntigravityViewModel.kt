@@ -95,19 +95,29 @@ class AntigravityViewModel(
         keepAlivePinned: Boolean
     ) {
         viewModelScope.launch {
-            val cleanUrl = endpointUrl.trim()
-            if (!RetainedWebViewManager.isSafeHttpUrl(cleanUrl)) {
+            val rawUrl = endpointUrl.trim()
+            if (!RetainedWebViewManager.isSafeHttpUrl(rawUrl)) {
                 _statusBanner.value = "Only https:// or http:// URLs are allowed."
                 return@launch
             }
-            val cleanName = name.trim().ifBlank { "Antigravity Remote" }
+            val cleanUrl = RetainedWebViewManager.stripSensitiveUrlCredentials(rawUrl).take(300)
+            if (!RetainedWebViewManager.isSafeHttpUrl(cleanUrl)) {
+                _statusBanner.value = "Invalid or unsafe host URL."
+                return@launch
+            }
+            val validMode = if (connectionMode in listOf("HYBRID_BRIDGE", "DIRECT_TUNNEL", "PAIRING_TOKEN")) {
+                connectionMode
+            } else {
+                "HYBRID_BRIDGE"
+            }
+            val cleanName = name.trim().take(80).ifBlank { "Antigravity Remote" }
             val entityId = existingId ?: nextUniqueId("srv")
             val entity = ServerProfileEntity(
                 id = entityId,
                 name = cleanName,
                 endpointUrl = cleanUrl,
-                connectionMode = connectionMode,
-                authToken = authToken.trim(),
+                connectionMode = validMode,
+                authToken = authToken.trim().take(512),
                 keepAlivePinned = keepAlivePinned,
                 lastLatencyMs = 0,
                 isSelected = true
@@ -263,16 +273,22 @@ class AuthenticatedCloudSyncViewModel(
 
     fun restoreCloudProfilesToLocal(cloudProfiles: List<CloudServerProfile>) {
         viewModelScope.launch {
-            val safeProfiles = cloudProfiles.filter { RetainedWebViewManager.isSafeHttpUrl(it.endpointUrl) }
-            val entities = safeProfiles.mapIndexed { index, cp ->
+            val entities = cloudProfiles.mapIndexedNotNull { index, cp ->
+                val cleanUrl = RetainedWebViewManager.stripSensitiveUrlCredentials(cp.endpointUrl).take(300)
+                if (!RetainedWebViewManager.isSafeHttpUrl(cleanUrl)) return@mapIndexedNotNull null
+                val validMode = if (cp.connectionMode in listOf("HYBRID_BRIDGE", "DIRECT_TUNNEL", "PAIRING_TOKEN")) {
+                    cp.connectionMode
+                } else {
+                    "HYBRID_BRIDGE"
+                }
                 ServerProfileEntity(
-                    id = cp.id.ifBlank { "cloud_$index" },
-                    name = cp.name,
-                    endpointUrl = cp.endpointUrl.trim(),
-                    connectionMode = cp.connectionMode,
+                    id = cp.id.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(120).ifBlank { "cloud_$index" },
+                    name = cp.name.trim().take(80).ifBlank { "Antigravity Remote" },
+                    endpointUrl = cleanUrl,
+                    connectionMode = validMode,
                     authToken = "",
                     keepAlivePinned = cp.keepAlivePinned,
-                    lastLatencyMs = cp.lastLatencyMs.toInt(),
+                    lastLatencyMs = cp.lastLatencyMs.coerceIn(0L, 60_000L).toInt(),
                     isSelected = index == 0
                 )
             }

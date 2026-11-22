@@ -11,14 +11,18 @@ import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebViewDatabase
 import com.example.BuildConfig
 import com.example.notifications.PulseNotificationManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,6 +61,9 @@ object AiStudioPinnedWebViewManager {
 
     private val _continuityState = MutableStateFlow(WebViewContinuityState())
     val continuityState: StateFlow<WebViewContinuityState> = _continuityState.asStateFlow()
+
+    private val _rendererGeneration = MutableStateFlow(0)
+    val rendererGeneration: StateFlow<Int> = _rendererGeneration.asStateFlow()
 
     private var lastGoodUrl: String = AiStudioWebSection.NEW_CHAT.url
     private var mainFrameFailedInCurrentLoad: Boolean = false
@@ -288,14 +295,20 @@ object AiStudioPinnedWebViewManager {
      * and `ServiceWorkerRegistration.showNotification` calls without triggering false-positive
      * "Run" button approval alerts).
      */
-    private fun injectAiStudioNotificationShim(webView: WebView?) {
+    private fun injectAiStudioNotificationShim(webView: WebView?, pageUrl: String? = null) {
         val target = webView ?: return
-        val prefix = PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX
+        val candidateUrl = pageUrl ?: try { target.url.orEmpty() } catch (_: Exception) { "" }
+        // Only inject the authenticated notification bridge nonce into verified HTTPS aistudio.google.com pages
+        if (!RetainedWebViewManager.isHostMatchingDomain(candidateUrl, "aistudio.google.com", requireHttps = true)) {
+            return
+        }
+        val prefix = PulseNotificationManager.buildAuthenticatedConsolePrefix()
         val js = """
             (function() {
               try {
                 if (window.__agStudioNotifyShimmed) { return; }
                 window.__agStudioNotifyShimmed = true;
+                var nativeConsoleInfo = console.info.bind(console);
                 function emitStudioNotify(title, options) {
                   try {
                     var opts = options || {};
@@ -304,7 +317,7 @@ object AiStudioPinnedWebViewManager {
                       body: String(opts.body || '').slice(0, 360),
                       tag: String(opts.tag || 'ai_studio_web').slice(0, 64)
                     };
-                    console.info('$prefix' + JSON.stringify(payload));
+                    nativeConsoleInfo('$prefix' + JSON.stringify(payload));
                   } catch (e) {}
                 }
                 function StudioNotification(title, options) {
@@ -349,20 +362,36 @@ object AiStudioPinnedWebViewManager {
         }
     }
 
-    fun clearSensitiveBrowsingData() {
+    fun clearSensitiveBrowsingData(context: Context? = null) {
+        val oldView = pinnedAiStudioWebView
+        pinnedAiStudioWebView = null
         try {
-            pinnedAiStudioWebView?.clearCache(true)
-            pinnedAiStudioWebView?.clearHistory()
-            pinnedAiStudioWebView?.clearFormData()
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
+            oldView?.stopLoading()
+            oldView?.loadUrl("about:blank")
+            oldView?.clearCache(true)
+            oldView?.clearHistory()
+            oldView?.clearFormData()
+            (oldView?.parent as? ViewGroup)?.removeView(oldView)
+            oldView?.destroy()
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.removeSessionCookies(null)
+            cookieManager.removeAllCookies(null)
+            cookieManager.flush()
+            WebStorage.getInstance().deleteAllData()
+            context?.let {
+                WebViewDatabase.getInstance(it.applicationContext).clearHttpAuthUsernamePassword()
+            }
         } catch (_: Exception) {
+        }
+        _continuityState.value.cachedSnapshot?.let { bmp ->
+            if (!bmp.isRecycled) bmp.recycle()
         }
         currentLoadedUrl = ""
         lastGoodUrl = AiStudioWebSection.NEW_CHAT.url
         mainFrameFailedInCurrentLoad = false
         _continuityState.value = WebViewContinuityState()
         _canGoBackState.value = false
+        _rendererGeneration.value = _rendererGeneration.value + 1
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -385,13 +414,13 @@ object AiStudioPinnedWebViewManager {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setLayerType(View.LAYER_TYPE_NONE, null)
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
                 } catch (_: Exception) {
                 }
             }
@@ -407,7 +436,8 @@ object AiStudioPinnedWebViewManager {
                 @Suppress("DEPRECATION")
                 saveFormData = false
                 setGeolocationEnabled(false)
-                allowContentAccess = true
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -470,13 +500,16 @@ object AiStudioPinnedWebViewManager {
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                     val raw = consoleMessage?.message()
                     if (raw != null && raw.startsWith(PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX)) {
-                        val parsed = PulseNotificationManager.parseWebNotificationConsolePayload(raw)
-                        if (parsed != null) {
-                            RetainedWebViewManager.onWebNotificationReceived?.invoke(
-                                parsed.title,
-                                parsed.body,
-                                parsed.tag
-                            )
+                        val activePageUrl = try { pinnedAiStudioWebView?.url.orEmpty() } catch (_: Exception) { "" }
+                        if (RetainedWebViewManager.isHostMatchingDomain(activePageUrl, "aistudio.google.com", requireHttps = true)) {
+                            val parsed = PulseNotificationManager.parseAuthenticatedWebNotificationPayload(raw)
+                            if (parsed != null) {
+                                RetainedWebViewManager.onWebNotificationReceived?.invoke(
+                                    parsed.title,
+                                    parsed.body,
+                                    parsed.tag
+                                )
+                            }
                         }
                         return true
                     }
@@ -496,6 +529,14 @@ object AiStudioPinnedWebViewManager {
             }
 
             webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? {
+                    return RetainedWebViewManager.interceptUnsafeSubresource(request)
+                        ?: super.shouldInterceptRequest(view, request)
+                }
+
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?
@@ -511,17 +552,19 @@ object AiStudioPinnedWebViewManager {
                         mainFrameFailedInCurrentLoad = false
                         currentLoadedUrl = url
                         lastGoodUrl = url
-                        if (url.contains("aistudio.google.com", ignoreCase = true)) {
+                        if (RetainedWebViewManager.isHostMatchingDomain(url, "aistudio.google.com", requireHttps = true)) {
                             updateSectionFromUrl(url)
+                            injectAiStudioNotificationShim(view, url)
                         }
-                        injectAiStudioNotificationShim(view)
                     }
                 }
 
                 override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
                     super.doUpdateVisitedHistory(view, url, isReload)
                     refreshCanGoBack(view)
-                    if (!url.isNullOrBlank() && url.contains("aistudio.google.com", ignoreCase = true)) {
+                    if (!url.isNullOrBlank() &&
+                        RetainedWebViewManager.isHostMatchingDomain(url, "aistudio.google.com", requireHttps = true)
+                    ) {
                         currentLoadedUrl = url
                         lastGoodUrl = url
                         updateSectionFromUrl(url)
@@ -575,8 +618,9 @@ object AiStudioPinnedWebViewManager {
                     if (!mainFrameFailedInCurrentLoad && !isErrorPage && RetainedWebViewManager.isSafeHttpUrl(url.orEmpty())) {
                         currentLoadedUrl = url.orEmpty()
                         lastGoodUrl = url.orEmpty()
-                        if (currentLoadedUrl.contains("aistudio.google.com", ignoreCase = true)) {
+                        if (RetainedWebViewManager.isHostMatchingDomain(currentLoadedUrl, "aistudio.google.com", requireHttps = true)) {
                             updateSectionFromUrl(currentLoadedUrl)
+                            injectAiStudioNotificationShim(view, currentLoadedUrl)
                         }
                         val prev = _continuityState.value
                         val wasRecovering = prev.status == OfflineRecoveryStatus.RECONNECTING || prev.hadMainFrameError
@@ -587,13 +631,33 @@ object AiStudioPinnedWebViewManager {
                             status = if (wasRecovering) OfflineRecoveryStatus.RESTORED else OfflineRecoveryStatus.ONLINE,
                             statusMessage = if (wasRecovering) "Back online • AI Studio updated" else ""
                         )
-                        injectAiStudioNotificationShim(view)
                         view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
                     }
                     if (!isErrorPage) {
                         RetainedWebViewManager.injectMobileLayoutFix(view)
                         applyLagBooster(domLagBoosterActive)
                     }
+                }
+
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    detail: RenderProcessGoneDetail?
+                ): Boolean {
+                    val crashedView = view ?: pinnedAiStudioWebView
+                    if (pinnedAiStudioWebView === crashedView) {
+                        pinnedAiStudioWebView = null
+                    }
+                    currentLoadedUrl = ""
+                    WebViewOfflineCacheHelper.runOnMainThread {
+                        try {
+                            (crashedView?.parent as? ViewGroup)?.removeView(crashedView)
+                            crashedView?.destroy()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    _rendererGeneration.value = _rendererGeneration.value + 1
+                    onPageEvent("AI Studio renderer recovered automatically.")
+                    return true
                 }
             }
             pinnedAiStudioWebView = this

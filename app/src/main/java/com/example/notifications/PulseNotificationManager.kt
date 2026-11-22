@@ -14,6 +14,8 @@ import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
 import org.json.JSONObject
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicInteger
 
 data class ParsedWebNotification(
@@ -46,6 +48,15 @@ object PulseNotificationManager {
     private val dedupLock = Any()
     private var lastSignature: String = ""
     private var lastDispatchedAtMs: Long = 0L
+
+    /**
+     * Per-process cryptographically random 128-bit bridge nonce kept inside closed JS IIFEs so
+     * arbitrary page scripts or third-party trackers cannot forge console-bridged OS notifications.
+     */
+    private val sessionBridgeNonce: String = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        .joinToString("") { "%02x".format(it) }
+
+    fun buildAuthenticatedConsolePrefix(): String = "$WEB_NOTIFY_CONSOLE_PREFIX$sessionBridgeNonce:"
 
     @Volatile
     var isAppInForeground: Boolean = true
@@ -104,6 +115,28 @@ object PulseNotificationManager {
     }
 
     /**
+     * Strictly verifies our per-process cryptographic bridge nonce (constant-time) before
+     * accepting any WebView console-bridged notification payload, preventing untrusted page
+     * scripts from spoofing native Android notifications.
+     */
+    fun parseAuthenticatedWebNotificationPayload(rawMessage: String?): ParsedWebNotification? {
+        if (rawMessage.isNullOrBlank() || !rawMessage.startsWith(WEB_NOTIFY_CONSOLE_PREFIX)) {
+            return null
+        }
+        val remainder = rawMessage.removePrefix(WEB_NOTIFY_CONSOLE_PREFIX)
+        val colonIdx = remainder.indexOf(':')
+        if (colonIdx <= 0) return null
+        val suppliedNonce = remainder.substring(0, colonIdx)
+        val expectedBytes = sessionBridgeNonce.toByteArray(Charsets.UTF_8)
+        val suppliedBytes = suppliedNonce.toByteArray(Charsets.UTF_8)
+        if (!MessageDigest.isEqual(expectedBytes, suppliedBytes)) {
+            return null
+        }
+        val jsonPart = remainder.substring(colonIdx + 1).trim()
+        return parseNotificationJson(jsonPart)
+    }
+
+    /**
      * Safely parses and sanitizes a console-bridged Web Notification payload emitted by
      * our WebView polyfill. Returns null if the message does not match our protocol or is empty.
      */
@@ -112,8 +145,11 @@ object PulseNotificationManager {
             return null
         }
         val jsonPart = rawMessage.removePrefix(WEB_NOTIFY_CONSOLE_PREFIX).trim()
-        if (jsonPart.isEmpty()) return null
+        return parseNotificationJson(jsonPart)
+    }
 
+    private fun parseNotificationJson(jsonPart: String): ParsedWebNotification? {
+        if (jsonPart.isEmpty()) return null
         return try {
             val obj = JSONObject(jsonPart)
             val cleanTitle = sanitizeText(obj.optString("title"), MAX_TITLE_CHARS)
@@ -245,6 +281,14 @@ object PulseNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Redacted lock-screen version prevents leaking agent outputs, hostnames, or sync activity
+        val publicRedactedNotification = NotificationCompat.Builder(appContext, channelId)
+            .setSmallIcon(R.drawable.ic_pulse_notification)
+            .setContentTitle("Antigravity Pulse")
+            .setContentText("Unlock device to view notification")
+            .setCategory(category)
+            .build()
+
         val notification = NotificationCompat.Builder(appContext, channelId)
             .setSmallIcon(R.drawable.ic_pulse_notification)
             .setContentTitle(title)
@@ -252,6 +296,8 @@ object PulseNotificationManager {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(priority)
             .setCategory(category)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicRedactedNotification)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()

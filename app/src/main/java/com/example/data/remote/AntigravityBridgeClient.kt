@@ -11,16 +11,21 @@ import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebViewDatabase
 import com.example.BuildConfig
 import com.example.notifications.PulseNotificationManager
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -66,6 +71,9 @@ object RetainedWebViewManager {
 
     private val _continuityState = MutableStateFlow(WebViewContinuityState())
     val continuityState: StateFlow<WebViewContinuityState> = _continuityState.asStateFlow()
+
+    private val _rendererGeneration = MutableStateFlow(0)
+    val rendererGeneration: StateFlow<Int> = _rendererGeneration.asStateFlow()
 
     private var lastGoodUrl: String = ""
     private var mainFrameFailedInCurrentLoad: Boolean = false
@@ -233,19 +241,182 @@ object RetainedWebViewManager {
 
     /**
      * Strict zero-trust HTTP(S) URL validator. Rejects non-HTTP(S) schemes (`file://`, `content://`,
-     * `javascript:`, `intent:`, `data:`), control characters, whitespace, oversized URLs, and
-     * scheme-only strings lacking a valid host.
+     * `javascript:`, `intent:`, `data:`), control characters, whitespace, oversized URLs,
+     * cloud metadata / link-local SSRF targets (`169.254.*`, `metadata.google.internal`, `0.0.0.0`),
+     * and cleartext HTTP downgrade attempts on trusted OAuth/workspace domains.
      */
     fun isSafeHttpUrl(url: String): Boolean {
         val clean = url.trim()
         if (clean.isEmpty() || clean.length > MAX_URL_LENGTH) return false
         if (clean.any { it.isISOControl() || it.isWhitespace() }) return false
+        // Reject backslashes before query/fragment to prevent authority-confusion parser bypasses
+        val authorityAndPath = clean.substringBefore('?').substringBefore('#')
+        if (authorityAndPath.contains('\\')) return false
         return try {
             val uri = Uri.parse(clean)
             val scheme = uri.scheme?.lowercase()
-            (scheme == "https" || scheme == "http") && !uri.host.isNullOrBlank()
+            val host = uri.host?.lowercase()?.trimEnd('.').orEmpty()
+            if ((scheme != "https" && scheme != "http") || host.isBlank()) return false
+            if (isBlockedMetadataOrUnspecifiedHost(host)) return false
+            if (scheme == "http" && isHttpsOnlyWorkspaceHost(host)) return false
+            true
         } catch (_: Exception) {
             false
+        }
+    }
+
+    internal fun isBlockedMetadataOrUnspecifiedHost(rawHost: String): Boolean {
+        val host = rawHost.lowercase().trim().trim('[', ']').trimEnd('.')
+        if (host.isEmpty()) return true
+        // Block obfuscated single-label integer/hex/octal IP hosts (e.g. 2852039166 or 0xa9fea9fe)
+        if (Regex("^(0x[0-9a-f]+|[0-9]+)$").matches(host)) return true
+        // Block dotted-octal/hex IPv4 forms (leading zero octets like 0251.0376.0251.0376 or 0xa9.x)
+        if (host.contains('.') && host.split('.').all { seg ->
+                Regex("^(0x[0-9a-f]+|0[0-7]+|[0-9]+)$").matches(seg)
+            } && host.split('.').any { seg ->
+                seg.startsWith("0x") || (seg.length > 1 && seg.startsWith("0"))
+            }
+        ) {
+            return true
+        }
+        return host == "0.0.0.0" ||
+            host == "::" ||
+            host.startsWith("::ffff:0.0.0.0") ||
+            host.startsWith("::ffff:0:0") ||
+            host.startsWith("169.254.") ||
+            host.startsWith("::ffff:169.254.") ||
+            host.startsWith("::ffff:a9fe:") ||
+            host.startsWith("fe80:") ||
+            host == "metadata.google.internal" ||
+            host == "metadata.goog" ||
+            host == "metadata" ||
+            host.endsWith(".metadata.google.internal")
+    }
+
+    internal fun isHttpsOnlyWorkspaceHost(rawHost: String): Boolean {
+        val host = rawHost.lowercase().trim().trimEnd('.')
+        val protectedDomains = listOf(
+            "aistudio.google.com",
+            "gemini.google.com",
+            "accounts.google.com",
+            "github.com",
+            "vercel.com",
+            "supabase.com"
+        )
+        return protectedDomains.any { domain -> host == domain || host.endsWith(".$domain") }
+    }
+
+    /**
+     * Exact parsed-host domain matcher (never substring `.contains()`) to prevent lookalike
+     * or query-string spoofing like `https://evil.com/?ref=github.com` or `https://evil-github.com`.
+     */
+    fun isHostMatchingDomain(url: String, domain: String, requireHttps: Boolean = true): Boolean {
+        if (!isSafeHttpUrl(url)) return false
+        val normalizedDomain = domain.lowercase().trim().trimStart('.').trimEnd('.')
+        if (normalizedDomain.isEmpty()) return false
+        return try {
+            val uri = Uri.parse(url.trim())
+            val scheme = uri.scheme?.lowercase()
+            if (requireHttps && scheme != "https") return false
+            val host = uri.host?.lowercase()?.trimEnd('.').orEmpty()
+            host == normalizedDomain || host.endsWith(".$normalizedDomain")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Strict scheme + host + effective-port origin comparison for gating privileged JS bridges
+     * (notification nonce shims and prompt injection) to the intended origin only.
+     */
+    fun isSameOrigin(urlA: String, urlB: String): Boolean {
+        if (!isSafeHttpUrl(urlA) || !isSafeHttpUrl(urlB)) return false
+        return try {
+            val a = Uri.parse(urlA.trim())
+            val b = Uri.parse(urlB.trim())
+            val schemeA = a.scheme?.lowercase() ?: return false
+            val schemeB = b.scheme?.lowercase() ?: return false
+            val hostA = a.host?.lowercase()?.trimEnd('.') ?: return false
+            val hostB = b.host?.lowercase()?.trimEnd('.') ?: return false
+            val portA = if (a.port != -1) a.port else if (schemeA == "https") 443 else 80
+            val portB = if (b.port != -1) b.port else if (schemeB == "https") 443 else 80
+            schemeA == schemeB && hostA == hostB && portA == portB
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Returns true only when a media (`getUserMedia`) request originates from a secure first-party
+     * workspace (`aistudio.google.com`, `gemini.google.com`) or the user's own active remote host.
+     * Arbitrary third-party sites in Pulse Browser require an explicit in-app user confirmation prompt.
+     */
+    fun isFirstPartyTrustedMediaOrigin(originUrl: String, activeRemoteEndpoint: String): Boolean {
+        if (!isSecureMediaOrigin(originUrl)) return false
+        if (isHostMatchingDomain(originUrl, "aistudio.google.com", requireHttps = true)) return true
+        if (isHostMatchingDomain(originUrl, "gemini.google.com", requireHttps = true)) return true
+        return activeRemoteEndpoint.isNotBlank() && isSameOrigin(originUrl, activeRemoteEndpoint)
+    }
+
+    /**
+     * Only attaches WebView session cookies to `DownloadManager` requests when the download is
+     * strictly HTTPS AND targets an allowlisted first-party workspace domain or the user's own
+     * active remote workstation host—preventing cross-origin cookie exfiltration via third-party downloads.
+     */
+    fun isTrustedCookieDownloadUrl(downloadUrl: String, activeRemoteEndpoint: String): Boolean {
+        if (!isSafeHttpUrl(downloadUrl)) return false
+        return try {
+            val uri = Uri.parse(downloadUrl.trim())
+            if (uri.scheme?.lowercase() != "https") return false
+            val host = uri.host?.lowercase()?.trimEnd('.').orEmpty()
+            if (host.isBlank()) return false
+            val trustedSuffixes = listOf(
+                "google.com",
+                "googleusercontent.com",
+                "gstatic.com",
+                "github.com",
+                "githubusercontent.com",
+                "vercel.com",
+                "supabase.com",
+                "supabase.co"
+            )
+            if (trustedSuffixes.any { domain -> host == domain || host.endsWith(".$domain") }) {
+                return true
+            }
+            val remoteHost = if (isSafeHttpUrl(activeRemoteEndpoint)) {
+                Uri.parse(activeRemoteEndpoint.trim()).host?.lowercase()?.trimEnd('.').orEmpty()
+            } else {
+                ""
+            }
+            remoteHost.isNotBlank() && host == remoteHost
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Blocks page-initiated `file://`, `content://`, and cloud metadata subresource requests
+     * across all WebViews while allowing normal HTTPS/HTTP traffic.
+     */
+    fun interceptUnsafeSubresource(request: WebResourceRequest?): WebResourceResponse? {
+        val uri = request?.url ?: return null
+        val scheme = uri.scheme?.lowercase().orEmpty()
+        val host = uri.host?.lowercase().orEmpty()
+        val isBlocked = scheme == "file" ||
+            scheme == "content" ||
+            isBlockedMetadataOrUnspecifiedHost(host) ||
+            (scheme == "http" && isHttpsOnlyWorkspaceHost(host))
+        return if (isBlocked) {
+            WebResourceResponse(
+                "text/plain",
+                "UTF-8",
+                403,
+                "Forbidden",
+                mapOf("X-Content-Type-Options" to "nosniff"),
+                ByteArrayInputStream(ByteArray(0))
+            )
+        } else {
+            null
         }
     }
 
@@ -337,14 +508,16 @@ object RetainedWebViewManager {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            // Use default window layer pipeline (LAYER_TYPE_NONE) instead of forcing an offscreen
+            // hardware FBO layer, preventing DRM rendernode errors on software-rendered environments.
+            setLayerType(View.LAYER_TYPE_NONE, null)
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    // Keep the WebView renderer high-priority so scrolling & resume stay instant
-                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+                    // Prioritize visible renderer while allowing safe downgrade when backgrounded
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
                 } catch (_: Exception) {
                 }
             }
@@ -360,8 +533,9 @@ object RetainedWebViewManager {
                 @Suppress("DEPRECATION")
                 saveFormData = false
                 setGeolocationEnabled(false)
-                // Required so WebView can read content:// URIs returned by Android's system file picker
-                allowContentAccess = true
+                // Block direct page-initiated content:// provider access (user file picker uses onShowFileChooser)
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 // Strictly block active HTTP mixed-content injection inside HTTPS sessions
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -424,8 +598,10 @@ object RetainedWebViewManager {
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                     val raw = consoleMessage?.message()
                     if (raw != null && raw.startsWith(PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX)) {
-                        if (hasActiveLoadedSession()) {
-                            val parsed = PulseNotificationManager.parseWebNotificationConsolePayload(raw)
+                        val activePageUrl = try { pinnedWebView?.url.orEmpty() } catch (_: Exception) { "" }
+                        val configuredEndpoint = currentLoadedEndpoint()
+                        if (hasActiveLoadedSession() && isSameOrigin(activePageUrl, configuredEndpoint)) {
+                            val parsed = PulseNotificationManager.parseAuthenticatedWebNotificationPayload(raw)
                             if (parsed != null) {
                                 onWebNotificationReceived?.invoke(parsed.title, parsed.body, parsed.tag)
                             }
@@ -446,6 +622,13 @@ object RetainedWebViewManager {
                 }
             }
             webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? {
+                    return interceptUnsafeSubresource(request) ?: super.shouldInterceptRequest(view, request)
+                }
+
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?
@@ -461,7 +644,7 @@ object RetainedWebViewManager {
                     if (!url.isNullOrBlank() && isSafeHttpUrl(url)) {
                         mainFrameFailedInCurrentLoad = false
                         lastGoodUrl = url
-                        injectWebNotificationBridge(view)
+                        injectWebNotificationBridge(view, url)
                     }
                 }
 
@@ -529,7 +712,7 @@ object RetainedWebViewManager {
                             status = if (wasRecovering) OfflineRecoveryStatus.RESTORED else OfflineRecoveryStatus.ONLINE,
                             statusMessage = if (wasRecovering) "Back online • Updated to latest" else ""
                         )
-                        injectWebNotificationBridge(view)
+                        injectWebNotificationBridge(view, url)
                         view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
                     }
                     if (!isErrorPage) {
@@ -540,6 +723,27 @@ object RetainedWebViewManager {
                             removeDomLagOptimizer(view)
                         }
                     }
+                }
+
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    detail: RenderProcessGoneDetail?
+                ): Boolean {
+                    val crashedView = view ?: pinnedWebView
+                    if (pinnedWebView === crashedView) {
+                        pinnedWebView = null
+                    }
+                    lastLoadedEndpoint = "__UNINITIALIZED__"
+                    WebViewOfflineCacheHelper.runOnMainThread {
+                        try {
+                            (crashedView?.parent as? ViewGroup)?.removeView(crashedView)
+                            crashedView?.destroy()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    _rendererGeneration.value = _rendererGeneration.value + 1
+                    onJsBridgeMessage("WebView renderer recovered automatically.")
+                    return true
                 }
             }
             pinnedWebView = this
@@ -604,16 +808,33 @@ object RetainedWebViewManager {
         )
     }
 
-    fun clearSensitiveBrowsingData() {
+    fun clearSensitiveBrowsingData(context: Context? = null) {
+        val oldView = pinnedWebView
+        pinnedWebView = null
         try {
-            pinnedWebView?.clearCache(true)
-            pinnedWebView?.clearHistory()
-            pinnedWebView?.clearFormData()
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
+            oldView?.stopLoading()
+            oldView?.loadUrl("about:blank")
+            oldView?.clearCache(true)
+            oldView?.clearHistory()
+            oldView?.clearFormData()
+            (oldView?.parent as? ViewGroup)?.removeView(oldView)
+            oldView?.destroy()
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.removeSessionCookies(null)
+            cookieManager.removeAllCookies(null)
+            cookieManager.flush()
+            WebStorage.getInstance().deleteAllData()
+            context?.let {
+                WebViewDatabase.getInstance(it.applicationContext).clearHttpAuthUsernamePassword()
+            }
         } catch (_: Exception) {
         }
+        _continuityState.value.cachedSnapshot?.let { bmp ->
+            if (!bmp.isRecycled) bmp.recycle()
+        }
+        _continuityState.value = WebViewContinuityState()
         _canGoBackState.value = false
+        _rendererGeneration.value = _rendererGeneration.value + 1
         resetToWelcomeScreen()
     }
 
@@ -704,12 +925,17 @@ object RetainedWebViewManager {
      * Agent-Completion & Approval Observer into the remote session so agent replies, task
      * completions, and approval prompts trigger native Android notifications with minimal CPU.
      */
-    fun injectWebNotificationBridge(webView: WebView? = pinnedWebView) {
+    fun injectWebNotificationBridge(webView: WebView? = pinnedWebView, pageUrl: String? = null) {
         val target = webView ?: return
-        val prefix = PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX
+        val candidateUrl = pageUrl ?: try { target.url.orEmpty() } catch (_: Exception) { "" }
+        val configuredEndpoint = currentLoadedEndpoint()
+        // Never leak the session bridge nonce into external/third-party origins navigated away from Remote
+        if (configuredEndpoint.isBlank() || !isSameOrigin(candidateUrl, configuredEndpoint)) return
+        val prefix = PulseNotificationManager.buildAuthenticatedConsolePrefix()
         val js = """
             (function() {
               try {
+                var nativeConsoleInfo = console.info.bind(console);
                 function emitNativeNotification(title, options) {
                   try {
                     var opts = options || {};
@@ -718,7 +944,7 @@ object RetainedWebViewManager {
                       body: String(opts.body || opts.message || '').slice(0, 360),
                       tag: String(opts.tag || '').slice(0, 64)
                     };
-                    console.info('$prefix' + JSON.stringify(payload));
+                    nativeConsoleInfo('$prefix' + JSON.stringify(payload));
                   } catch (e) {}
                 }
 
@@ -1081,7 +1307,12 @@ object RetainedWebViewManager {
         """.trimIndent()
         webView.post {
             try {
-                webView.evaluateJavascript(js, null)
+                val activeUrl = webView.url.orEmpty()
+                val configuredEndpoint = currentLoadedEndpoint()
+                // Only inject private prompts into the user's configured remote origin
+                if (configuredEndpoint.isNotBlank() && isSameOrigin(activeUrl, configuredEndpoint)) {
+                    webView.evaluateJavascript(js, null)
+                }
             } catch (_: Exception) {
             }
         }

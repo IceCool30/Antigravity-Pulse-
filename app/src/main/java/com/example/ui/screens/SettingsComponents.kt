@@ -53,6 +53,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.ui.theme.AntigravityThemePreset
 import com.example.ui.theme.AppearanceSettings
 import com.example.ui.theme.JetBrainsMonoFontFamily
+import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.OfficialAntigravityPresets
 import com.example.ui.theme.frostedGlass
 import com.example.ui.theme.parseHexColor
@@ -479,7 +480,7 @@ internal fun SettingsHexColorEditorDialog(
                 },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = accent,
-                    contentColor = Color(0xFF000000)
+                    contentColor = LocalAppearanceSettings.current.onAccentColor
                 )
             ) {
                 Text("Apply", fontWeight = FontWeight.Bold)

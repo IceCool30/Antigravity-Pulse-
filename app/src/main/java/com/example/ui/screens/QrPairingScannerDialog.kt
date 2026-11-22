@@ -32,12 +32,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,12 +58,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.BuildConfig
+import com.example.data.remote.RetainedWebViewManager
+import com.example.ui.theme.CrimsonError
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -85,8 +92,9 @@ private const val MAX_QR_TOKEN_LENGTH = 512
 
 /**
  * Validates and normalizes a scanned endpoint URL.
- * Accepts only `https://`, `http://`, `wss://`, or `ws://` with a non-blank host and no control chars,
- * rejecting `javascript:`, `file:`, `content:`, `data:`, and `intent:` payloads at the QR boundary.
+ * Accepts only `https://`, `http://`, `wss://`, or `ws://` that pass [RetainedWebViewManager.isSafeHttpUrl],
+ * rejecting dangerous schemes, cloud metadata IPs, obfuscated IP encodings, backslash authority confusion,
+ * and cleartext downgrades of HTTPS-only cloud workspaces at the QR boundary.
  */
 private fun sanitizeScannedEndpointUrl(rawUrl: String): String? {
     val clean = rawUrl.trim()
@@ -97,12 +105,14 @@ private fun sanitizeScannedEndpointUrl(rawUrl: String): String? {
         val scheme = uri.scheme?.lowercase() ?: return null
         val host = uri.host
         if (host.isNullOrBlank()) return null
-        when (scheme) {
+        val normalized = when (scheme) {
             "https", "http" -> clean
             "wss" -> "https://" + clean.substring(6)
             "ws" -> "http://" + clean.substring(5)
-            else -> null
+            else -> return null
         }
+        if (!RetainedWebViewManager.isSafeHttpUrl(normalized)) return null
+        normalized
     } catch (_: Exception) {
         null
     }
@@ -229,6 +239,7 @@ fun QrPairingScannerDialog(
     var activeCamera by remember { mutableStateOf<Camera?>(null) }
     var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var statusMessage by remember { mutableStateOf("Align the Google Antigravity Remote QR code inside the frame") }
+    var pendingScannedPayload by remember { mutableStateOf<ParsedPairingPayload?>(null) }
     val scanDelivered = remember { AtomicBoolean(false) }
     val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
     val barcodeScanner = remember {
@@ -376,7 +387,7 @@ fun QrPairingScannerDialog(
                                                             val parsed = parseAntigravityPairingPayload(raw)
                                                             if (parsed != null && scanDelivered.compareAndSet(false, true)) {
                                                                 ContextCompat.getMainExecutor(ctx).execute {
-                                                                    onPairingScanned(parsed)
+                                                                    pendingScannedPayload = parsed
                                                                 }
                                                                 break
                                                             } else if (parsed == null) {
@@ -400,8 +411,10 @@ fun QrPairingScannerDialog(
                                             imageAnalysis
                                         )
                                     } catch (e: Exception) {
-                                        Log.e(QR_TAG, "Failed to bind CameraX QR scanner", e)
-                                        statusMessage = "Camera preview unavailable on this device: ${e.localizedMessage}"
+                                        if (BuildConfig.DEBUG) {
+                                            Log.e(QR_TAG, "Failed to bind CameraX QR scanner", e)
+                                        }
+                                        statusMessage = "Camera preview unavailable on this device."
                                     }
                                 }, ContextCompat.getMainExecutor(ctx))
                                 previewView
@@ -410,27 +423,151 @@ fun QrPairingScannerDialog(
                         )
 
                         // Viewfinder Reticle Overlay
-                        Box(
-                            modifier = Modifier
-                                .size(250.dp)
-                                .clip(RoundedCornerShape(24.dp))
-                                .border(2.5.dp, EmeraldOnline, RoundedCornerShape(24.dp))
-                        )
-
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(24.dp)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color.Black.copy(alpha = 0.72f))
-                                .padding(horizontal = 16.dp, vertical = 10.dp)
-                        ) {
-                            Text(
-                                text = statusMessage,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White,
-                                textAlign = TextAlign.Center
+                        if (pendingScannedPayload == null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(250.dp)
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .border(2.5.dp, EmeraldOnline, RoundedCornerShape(24.dp))
                             )
+
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(24.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color.Black.copy(alpha = 0.72f))
+                                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = statusMessage,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        } else {
+                            // Explicit preview & confirmation gate to prevent drive-by QR phishing/auto-connect
+                            val scanned = pendingScannedPayload!!
+                            val sanitizedDisplayUrl = remember(scanned.endpointUrl) {
+                                RetainedWebViewManager.stripSensitiveUrlCredentials(scanned.endpointUrl)
+                            }
+                            val isHttpsEndpoint = remember(scanned.endpointUrl) {
+                                scanned.endpointUrl.lowercase().startsWith("https://")
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.78f))
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(surface)
+                                        .border(1.dp, appearance.borderColor, RoundedCornerShape(20.dp))
+                                        .padding(20.dp)
+                                        .testTag("qr_confirmation_card"),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isHttpsEndpoint) Icons.Default.Lock else Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = if (isHttpsEndpoint) appearance.successColor else appearance.errorColor,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Text(
+                                            text = "Confirm Scanned Host",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = fg
+                                        )
+                                    }
+
+                                    Text(
+                                        text = "Verify this destination before saving and opening it in Antigravity Pulse:",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = secondaryFg
+                                    )
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(bg)
+                                            .border(1.dp, appearance.borderColor, RoundedCornerShape(12.dp))
+                                            .padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = scanned.hostName,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = fg,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = sanitizedDisplayUrl,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = secondaryFg,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (scanned.authToken.isNotBlank()) {
+                                            Text(
+                                                text = "Includes pairing token (hidden)",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = accent
+                                            )
+                                        }
+                                    }
+
+                                    if (!isHttpsEndpoint) {
+                                        Text(
+                                            text = "Warning: This QR code uses an unencrypted HTTP address. Only connect on a trusted private network.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = appearance.errorColor
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                pendingScannedPayload = null
+                                                scanDelivered.set(false)
+                                                statusMessage = "Align the Google Antigravity Remote QR code inside the frame"
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("qr_rescan_button")
+                                        ) {
+                                            Text("Scan Again", color = fg)
+                                        }
+                                        Button(
+                                            onClick = { onPairingScanned(scanned) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = accent,
+                                                contentColor = appearance.onAccentColor
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("qr_confirm_connect_button")
+                                        ) {
+                                            Text("Connect Host", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     } else {
                         Column(
@@ -462,7 +599,7 @@ fun QrPairingScannerDialog(
                                 onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = accent,
-                                    contentColor = Color(0xFF070708)
+                                    contentColor = appearance.onAccentColor
                                 ),
                                 modifier = Modifier.testTag("request_camera_permission_button")
                             ) {

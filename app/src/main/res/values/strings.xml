@@ -2,9 +2,11 @@
     <string name="app_name">Antigravity Pulse</string>
     <string name="nav_bridge">Remote</string>
     <string name="nav_ai_studio">AI Studio</string>
+    <string name="nav_gemini">Gemini</string>
     <string name="nav_github">GitHub</string>
     <string name="nav_vercel">Vercel</string>
     <string name="nav_supabase">Supabase</string>
+    <string name="nav_browser">Browser</string>
     <string name="nav_sync">Cloud Sync</string>
     <string name="nav_sync_short">Sync</string>
     <string name="sign_in_with_google">Sign in with Google</string>

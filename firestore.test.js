@@ -122,6 +122,34 @@ test("Authenticated owner: valid serverProfiles CRUD succeeds; javascript URLs a
     })
   );
 
+  // Reject URLs embedding query tokens or user:pass@ credentials
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_qtoken").set({
+      userId: ALICE_UID,
+      name: "Query Token URL",
+      endpointUrl: "https://ag-remote.dev.example.com/app?token=leaked_secret",
+      connectionMode: "HYBRID_BRIDGE",
+      authToken: "",
+      keepAlivePinned: true,
+      lastLatencyMs: 10,
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_userinfo").set({
+      userId: ALICE_UID,
+      name: "UserInfo URL",
+      endpointUrl: "https://admin:hunter2@ag-remote.dev.example.com",
+      connectionMode: "HYBRID_BRIDGE",
+      authToken: "",
+      keepAlivePinned: true,
+      lastLatencyMs: 10,
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
   // Reject immutable createdAt mutation on update
   await assertFails(
     aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_1").update({
@@ -219,5 +247,94 @@ test("Retired aiStudioPresets collection is strictly denied by global default-de
       createdAt: created,
       updatedAt: created,
     })
+  );
+});
+
+test("Hardened rules reject anonymous tokens, metadata/backslash URLs, whitespace fields, timestamp rollbacks, extra update keys, and oversized list queries", async () => {
+  const created = new Date(Date.now() - 20000);
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+
+  // Reject anonymous sign-in provider
+  const anonDb = testEnv
+    .authenticatedContext("anon_uid_1", { firebase: { sign_in_provider: "anonymous" } })
+    .firestore();
+  await assertFails(
+    anonDb.collection("users").doc("anon_uid_1").collection("serverProfiles").get()
+  );
+
+  // Reject cloud metadata & backslash-confusion endpointUrls
+  for (const badUrl of [
+    "http://169.254.169.254/latest/meta-data",
+    "http://metadata.google.internal/computeMetadata/v1/",
+    "https://evil.com\\@trusted.example.com",
+    "https://good.example.com/<script>alert(1)</script>",
+  ]) {
+    await assertFails(
+      aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("bad_url_test").set({
+        userId: ALICE_UID,
+        name: "Bad Host",
+        endpointUrl: badUrl,
+        connectionMode: "HYBRID_BRIDGE",
+        authToken: "",
+        keepAlivePinned: true,
+        lastLatencyMs: 5,
+        createdAt: created,
+        updatedAt: created,
+      })
+    );
+  }
+
+  // Reject whitespace-only prompt title/body
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("copilotPrompts").doc("blank_prompt").set({
+      userId: ALICE_UID,
+      title: "   ",
+      promptText: "Valid body",
+      rolePersona: "Remote",
+      preferredModel: "default",
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Create valid doc, then verify timestamp rollback & extra key injection are denied on update
+  const ref = aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").doc("prof_mono");
+  await assertSucceeds(
+    ref.set({
+      userId: ALICE_UID,
+      name: "Workstation",
+      endpointUrl: "https://workstation.example.com:8443/app",
+      connectionMode: "HYBRID_BRIDGE",
+      authToken: "",
+      keepAlivePinned: true,
+      lastLatencyMs: 12,
+      createdAt: created,
+      updatedAt: new Date(Date.now() - 5000),
+    })
+  );
+
+  // Timestamp rollback (updatedAt earlier than existing updatedAt) must fail
+  await assertFails(
+    ref.update({
+      name: "Rolled Back",
+      updatedAt: new Date(Date.now() - 15000),
+    })
+  );
+
+  // Rogue extra key on update must fail
+  await assertFails(
+    ref.update({
+      name: "Injected",
+      isAdmin: true,
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+
+  // Oversized list query (>100) must fail while <=100 succeeds
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").limit(500).get()
+  );
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("serverProfiles").limit(100).get()
   );
 });

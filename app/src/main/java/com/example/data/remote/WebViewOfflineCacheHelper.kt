@@ -78,6 +78,40 @@ object WebViewOfflineCacheHelper {
     }
 
     /**
+     * Blocks offline bitmap snapshots on authentication, OAuth, 2FA, password, API token, key,
+     * and billing pages so sensitive credentials are never retained in visual continuity bitmaps.
+     */
+    fun isSensitiveNoSnapshotUrl(url: String): Boolean {
+        val clean = url.trim()
+        if (clean.isEmpty()) return true
+        return try {
+            val uri = android.net.Uri.parse(clean)
+            val host = uri.host?.lowercase()?.trimEnd('.').orEmpty()
+            val path = uri.path?.lowercase().orEmpty()
+            val isSensitiveHost = host == "accounts.google.com" ||
+                host.endsWith(".accounts.google.com") ||
+                host.startsWith("login.") ||
+                host.startsWith("auth.") ||
+                host.startsWith("sso.") ||
+                host.startsWith("oauth.") ||
+                host.startsWith("signin.") ||
+                host.startsWith("id.")
+            if (isSensitiveHost) return true
+
+            val sensitivePathTokens = listOf(
+                "/login", "/signin", "/sign-in", "/logout", "/oauth", "/authorize",
+                "/auth/", "/sso", "/sessions", "/2fa", "/mfa", "/totp", "/passkey",
+                "/password", "/reset-password", "/token", "/tokens", "/secret",
+                "/secrets", "/keys", "/ssh", "/billing", "/checkout", "/payment",
+                "/settings/security", "/account/tokens"
+            )
+            sensitivePathTokens.any { token -> path.contains(token) }
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    /**
      * Captures a lightweight, memory-safe visual snapshot of the currently rendered WebView frame
      * so Chromium's built-in error page or reload flash never blanks the user's screen.
      */
@@ -91,7 +125,8 @@ object WebViewOfflineCacheHelper {
         if (currentUrl.isBlank() ||
             currentUrl.startsWith("about:", ignoreCase = true) ||
             currentUrl.startsWith("chrome-error:", ignoreCase = true) ||
-            !RetainedWebViewManager.isSafeHttpUrl(currentUrl)
+            !RetainedWebViewManager.isSafeHttpUrl(currentUrl) ||
+            isSensitiveNoSnapshotUrl(currentUrl)
         ) {
             return null
         }

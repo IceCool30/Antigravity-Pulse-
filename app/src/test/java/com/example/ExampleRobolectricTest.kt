@@ -892,4 +892,418 @@ class ExampleRobolectricTest {
         assertFalse(github.isDesktopModeState.value)
         assertEquals("home", github.activeShortcutId.value)
     }
+
+    @Test
+    fun `switching between GitHub, Vercel, Supabase, and Gemini mounts distinct RAM-pinned WebViews`() {
+        com.example.data.remote.DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData()
+        val activeWorkspace = androidx.compose.runtime.mutableStateOf(
+            com.example.data.remote.DevWebWorkspace.GITHUB
+        )
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                val ws = activeWorkspace.value
+                androidx.compose.runtime.key(ws) {
+                    com.example.ui.screens.PinnedWebWorkspaceScreen(
+                        workspace = ws,
+                        domLagBoosterEnabled = true,
+                        isFullscreenBarsHidden = false,
+                        onToggleDomBooster = {},
+                        onStatusEvent = {}
+                    )
+                }
+            }
+        }
+
+        // 1. Starts on GitHub — only GitHub should be pinned initially
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("github_web_screen").assertIsDisplayed()
+        assertTrue(com.example.data.remote.DevWebWorkspaceRegistry.session(com.example.data.remote.DevWebWorkspace.GITHUB).isPinnedInRam())
+        assertFalse(com.example.data.remote.DevWebWorkspaceRegistry.session(com.example.data.remote.DevWebWorkspace.VERCEL).isPinnedInRam())
+
+        // 2. Switch to Vercel -> Vercel screen & distinct WebView must mount immediately
+        composeTestRule.runOnIdle { activeWorkspace.value = com.example.data.remote.DevWebWorkspace.VERCEL }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("vercel_web_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("vercel_shortcut_deployments").assertIsDisplayed()
+        assertTrue(com.example.data.remote.DevWebWorkspaceRegistry.session(com.example.data.remote.DevWebWorkspace.VERCEL).isPinnedInRam())
+
+        // 3. Switch to Supabase -> Supabase screen & distinct WebView must mount immediately
+        composeTestRule.runOnIdle { activeWorkspace.value = com.example.data.remote.DevWebWorkspace.SUPABASE }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("supabase_web_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("supabase_shortcut_projects").assertIsDisplayed()
+        assertTrue(com.example.data.remote.DevWebWorkspaceRegistry.session(com.example.data.remote.DevWebWorkspace.SUPABASE).isPinnedInRam())
+
+        // 4. Switch to Gemini Web -> Gemini screen & shortcuts (Chat, Gems, Saved) mount cleanly
+        composeTestRule.runOnIdle { activeWorkspace.value = com.example.data.remote.DevWebWorkspace.GEMINI }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("gemini_web_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("gemini_shortcut_chat").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("gemini_shortcut_gems").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("gemini_shortcut_saved").assertIsDisplayed()
+        assertTrue(com.example.data.remote.DevWebWorkspaceRegistry.session(com.example.data.remote.DevWebWorkspace.GEMINI).isPinnedInRam())
+
+        composeTestRule.onNodeWithTag("gemini_shortcut_gems").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(
+            "gems",
+            com.example.data.remote.DevWebWorkspaceRegistry.session(com.example.data.remote.DevWebWorkspace.GEMINI).activeShortcutId.value
+        )
+
+        com.example.data.remote.DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp-xxhdpi")
+    fun `Pulse Browser resolves URLs safely, supports Speed Dial, multi-tab lifecycle, and Desktop View`() {
+        com.example.data.remote.PulseBrowserManager.clearAllSensitiveBrowsingData()
+
+        // 1. Smart omnibox URL & search resolution + unsafe scheme rejection
+        assertEquals(
+            "https://vercel.app",
+            com.example.data.remote.PulseBrowserManager.resolveAddressInput("vercel.app")
+        )
+        assertEquals(
+            "http://localhost:3000/dashboard",
+            com.example.data.remote.PulseBrowserManager.resolveAddressInput("localhost:3000/dashboard")
+        )
+        assertEquals(
+            "http://192.168.1.40:8080",
+            com.example.data.remote.PulseBrowserManager.resolveAddressInput("192.168.1.40:8080")
+        )
+        val searchUrl = com.example.data.remote.PulseBrowserManager.resolveAddressInput("jetpack compose webview")
+        assertNotNull(searchUrl)
+        assertTrue(searchUrl!!.startsWith("https://www.google.com/search?q="))
+
+        assertNull(com.example.data.remote.PulseBrowserManager.resolveAddressInput("javascript:alert(1)"))
+        assertNull(com.example.data.remote.PulseBrowserManager.resolveAddressInput("file:///etc/passwd"))
+        assertNull(com.example.data.remote.PulseBrowserManager.resolveAddressInput("data:text/html,<script>"))
+
+        // 2. Render PulseBrowserScreen and verify Speed Dial + multi-tab open/switch/close + Desktop View
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.screens.PulseBrowserScreen(
+                    domLagBoosterEnabled = true,
+                    onStatusEvent = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("pulse_browser_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("browser_top_chrome").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("browser_speed_dial").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("browser_quick_link_vercel").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("browser_quick_link_gemini").assertIsDisplayed()
+
+        // Tap Vercel Speed Dial tile -> loads Vercel in tab 1 and hides Speed Dial
+        composeTestRule.onNodeWithTag("browser_quick_link_vercel").performClick()
+        composeTestRule.waitForIdle()
+        val firstTab = com.example.data.remote.PulseBrowserManager.activeTab()
+        assertEquals("https://vercel.com/dashboard", firstTab.url)
+
+        // Open a second tab -> Speed Dial returns for tab 2
+        composeTestRule.onNodeWithTag("browser_new_tab_button").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(2, com.example.data.remote.PulseBrowserManager.tabs.value.size)
+        val secondTab = com.example.data.remote.PulseBrowserManager.activeTab()
+        assertTrue(secondTab.id != firstTab.id)
+        composeTestRule.onNodeWithTag("browser_speed_dial").assertIsDisplayed()
+
+        // Toggle Desktop View on active tab
+        composeTestRule.onNodeWithTag("browser_desktop_mode_button").performClick()
+        composeTestRule.waitForIdle()
+        assertTrue(com.example.data.remote.PulseBrowserManager.activeTab().isDesktopMode)
+
+        // Close second tab -> cleanly falls back to tab 1
+        composeTestRule.onNodeWithTag("browser_close_tab_${secondTab.id}").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(1, com.example.data.remote.PulseBrowserManager.tabs.value.size)
+        assertEquals(firstTab.id, com.example.data.remote.PulseBrowserManager.activeTabId.value)
+
+        // Offline visual continuity transition
+        com.example.data.remote.PulseBrowserManager.onNetworkLostAll()
+        assertFalse(com.example.data.remote.PulseBrowserManager.activeTab().continuityState.isOnline)
+        com.example.data.remote.PulseBrowserManager.onNetworkRestoredAll(autoReloadAfterLongOutage = false)
+        assertTrue(com.example.data.remote.PulseBrowserManager.activeTab().continuityState.isOnline)
+
+        com.example.data.remote.PulseBrowserManager.clearAllSensitiveBrowsingData()
+    }
+
+    @Test
+    @Config(sdk = [34], qualifiers = "w411dp-h891dp-xxhdpi")
+    fun `compact MovableFloatingControlPanel starts with collapsed dropdowns and expands Workspaces and Page Tools`() {
+        val isExpandedState = androidx.compose.runtime.mutableStateOf(true)
+        var selectedTab = 6
+        var newTabClicks = 0
+        var desktopMode = false
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.components.MovableFloatingControlPanel(
+                    isExpanded = isExpandedState.value,
+                    xFraction = 0f,
+                    yFraction = 0.2f,
+                    tabs = listOf(
+                        com.example.ui.components.FloatingPanelTabItem(0, "Remote", Icons.Default.Language, "nav_tab_bridge"),
+                        com.example.ui.components.FloatingPanelTabItem(6, "Browser", Icons.Default.Language, "nav_tab_browser"),
+                        com.example.ui.components.FloatingPanelTabItem(7, "Cloud Sync", Icons.Default.CloudSync, "nav_tab_sync")
+                    ),
+                    selectedTabIndex = selectedTab,
+                    activeHostLabel = "My Workstation",
+                    isBrowserActive = true,
+                    isBrowserBarVisible = true,
+                    browserTabCount = 2,
+                    isDesktopModeEnabled = desktopMode,
+                    surface = Color(0xFF0A0A0C),
+                    elevated = Color(0xFF141418),
+                    border = Color(0xFF222228),
+                    fg = Color.White,
+                    secondaryFg = Color.LightGray,
+                    accent = Color(0xFFFFC799),
+                    onExpandedChange = { isExpandedState.value = it },
+                    onPersistPositionFraction = { _, _ -> },
+                    onSelectTab = { selectedTab = it },
+                    onNewBrowserTab = { newTabClicks++ },
+                    onToggleDesktopMode = { desktopMode = it },
+                    onOpenHostSwitcher = {},
+                    onOpenQrScanner = {},
+                    onReloadWeb = {},
+                    onShowBars = {},
+                    onOpenSettings = {}
+                )
+            }
+        }
+
+        // Both Workspaces and Page Tools dropdowns must be collapsed by default
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("floating_workspaces_dropdown_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("floating_page_tools_dropdown_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("floating_workspaces_dropdown_content").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("floating_page_tools_dropdown_content").assertDoesNotExist()
+
+        // Expand Page Tools -> Browser actions appear and work
+        composeTestRule.onNodeWithTag("floating_page_tools_dropdown_toggle").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("floating_page_tools_dropdown_content").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("floating_browser_desktop_mode").performClick()
+        composeTestRule.waitForIdle()
+        assertTrue(desktopMode)
+
+        composeTestRule.onNodeWithTag("floating_browser_new_tab").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(1, newTabClicks)
+        assertFalse(isExpandedState.value)
+
+        // Re-open panel -> dropdowns auto-reset to collapsed, expand Workspaces and switch tab
+        composeTestRule.runOnIdle { isExpandedState.value = true }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("floating_workspaces_dropdown_content").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("floating_workspaces_dropdown_toggle").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("floating_workspaces_dropdown_content").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("floating_tab_nav_tab_sync").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(7, selectedTab)
+    }
+
+    @Test
+    fun `Phase 1 multi-user isolation destroys all pinned WebViews bumps rendererGeneration and strips persisted URL credentials`() = runBlocking {
+        // 1. Pin AI Studio and GitHub WebViews in RAM and capture their initial renderer generations
+        com.example.data.remote.AiStudioPinnedWebViewManager.obtainPinnedWebView(
+            context = context,
+            initialSection = com.example.data.remote.AiStudioWebSection.NEW_CHAT,
+            domLagBooster = true,
+            onPageEvent = {}
+        )
+        val githubSession = com.example.data.remote.DevWebWorkspaceRegistry.session(
+            com.example.data.remote.DevWebWorkspace.GITHUB
+        )
+        githubSession.obtainPinnedWebView(
+            context = context,
+            domLagBooster = true,
+            onPageEvent = {}
+        )
+        assertTrue(com.example.data.remote.AiStudioPinnedWebViewManager.isPinnedInRam())
+        assertTrue(githubSession.isPinnedInRam())
+
+        val aiGenBefore = com.example.data.remote.AiStudioPinnedWebViewManager.rendererGeneration.value
+        val ghGenBefore = githubSession.rendererGeneration.value
+
+        // 2. Wipe sensitive browsing data -> live WebViews must be destroyed (unpinned) & generations incremented
+        com.example.data.remote.AiStudioPinnedWebViewManager.clearSensitiveBrowsingData(context)
+        com.example.data.remote.DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData(context)
+        com.example.data.remote.RetainedWebViewManager.clearSensitiveBrowsingData(context)
+        com.example.data.remote.PulseBrowserManager.clearAllSensitiveBrowsingData(context)
+
+        assertFalse(com.example.data.remote.AiStudioPinnedWebViewManager.isPinnedInRam())
+        assertFalse(githubSession.isPinnedInRam())
+        assertTrue(com.example.data.remote.AiStudioPinnedWebViewManager.rendererGeneration.value > aiGenBefore)
+        assertTrue(githubSession.rendererGeneration.value > ghGenBefore)
+
+        // 3. Verify lastSignedInUid persists for cold-start cross-user account-switch detection
+        val prefs = AppearancePreferencesManager(context)
+        prefs.update { it.copy(lastSignedInUid = "user_alice_uid") }
+        assertEquals("user_alice_uid", AppearancePreferencesManager(context).settings.value.lastSignedInUid)
+        prefs.update { it.copy(lastSignedInUid = "") }
+        assertEquals("", AppearancePreferencesManager(context).settings.value.lastSignedInUid)
+
+        // 4. Verify AntigravityViewModel strips embedded URL userinfo/query tokens before saving to Room
+        val dao = database.dao()
+        val vm = com.example.viewmodel.AntigravityViewModel(dao)
+        vm.addOrUpdateServerProfile(
+            existingId = "srv_sanitized",
+            name = "Workstation",
+            endpointUrl = "https://admin:hunter2@dev.example.com:8443/app?token=leaked_secret#frag",
+            connectionMode = "UNKNOWN_MODE",
+            authToken = "local_tok",
+            keepAlivePinned = true
+        )
+        // Wait briefly for viewModelScope coroutine to commit to in-memory Room DB
+        var saved: ServerProfileEntity? = null
+        repeat(20) {
+            saved = dao.getAllServerProfilesOnce().firstOrNull { it.id == "srv_sanitized" }
+            if (saved != null) return@repeat
+            kotlinx.coroutines.delay(25L)
+        }
+        assertNotNull(saved)
+        assertEquals("https://dev.example.com:8443/app", saved!!.endpointUrl)
+        assertEquals("HYBRID_BRIDGE", saved.connectionMode)
+    }
+
+    @Test
+    fun `Phase 2 WebView and bridge security blocks obfuscated SSRF hosts, lookalike origins, untrusted cookie downloads, silent third-party media grants, and sensitive page snapshots`() {
+        // 1. Obfuscated integer/hex/octal/IPv6-mapped metadata IPs and backslash authority confusion
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("http://2852039166/latest/meta-data"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("http://0xa9fea9fe/latest/meta-data"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("http://0251.0376.0251.0376/"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("http://[::ffff:169.254.169.254]/"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("https://evil.com\\@aistudio.google.com"))
+        assertTrue(RetainedWebViewManager.isSafeHttpUrl("https://192.168.1.50:8443/app"))
+
+        // 2. Strict parsed-host domain matching defeats lookalike & query-string spoofing
+        assertTrue(RetainedWebViewManager.isHostMatchingDomain("https://aistudio.google.com/prompts/new_chat", "aistudio.google.com"))
+        assertTrue(RetainedWebViewManager.isHostMatchingDomain("https://api.github.com/repos", "github.com"))
+        assertFalse(RetainedWebViewManager.isHostMatchingDomain("https://evil-github.com/login", "github.com"))
+        assertFalse(RetainedWebViewManager.isHostMatchingDomain("https://evil.com/?ref=aistudio.google.com", "aistudio.google.com"))
+        assertFalse(RetainedWebViewManager.isHostMatchingDomain("http://github.com/", "github.com", requireHttps = true))
+
+        // 3. Strict same-origin matching for notification shims & prompt injection
+        assertTrue(RetainedWebViewManager.isSameOrigin("https://dev.example.com:8443/chat", "https://dev.example.com:8443/"))
+        assertTrue(RetainedWebViewManager.isSameOrigin("https://dev.example.com:443/a", "https://dev.example.com/b"))
+        assertFalse(RetainedWebViewManager.isSameOrigin("https://evil.com/", "https://dev.example.com:8443/"))
+        assertFalse(RetainedWebViewManager.isSameOrigin("https://dev.example.com:9443/", "https://dev.example.com:8443/"))
+
+        // 4. First-party media origin trust (third-party sites require explicit confirmation dialog)
+        val remoteEndpoint = "https://workstation.tailnet.ts.net:8443"
+        assertTrue(RetainedWebViewManager.isFirstPartyTrustedMediaOrigin("https://aistudio.google.com", remoteEndpoint))
+        assertTrue(RetainedWebViewManager.isFirstPartyTrustedMediaOrigin("https://gemini.google.com", remoteEndpoint))
+        assertTrue(RetainedWebViewManager.isFirstPartyTrustedMediaOrigin("https://workstation.tailnet.ts.net:8443", remoteEndpoint))
+        assertFalse(RetainedWebViewManager.isFirstPartyTrustedMediaOrigin("https://random-third-party.example.com", remoteEndpoint))
+
+        // 5. Cookie-scoped DownloadManager guard blocks third-party cookie exfiltration
+        assertTrue(RetainedWebViewManager.isTrustedCookieDownloadUrl("https://github.com/user/repo/archive.zip", remoteEndpoint))
+        assertTrue(RetainedWebViewManager.isTrustedCookieDownloadUrl("https://workstation.tailnet.ts.net:8443/export.tar", remoteEndpoint))
+        assertFalse(RetainedWebViewManager.isTrustedCookieDownloadUrl("https://attacker.example.com/steal.bin", remoteEndpoint))
+        assertFalse(RetainedWebViewManager.isTrustedCookieDownloadUrl("http://github.com/archive.zip", remoteEndpoint))
+
+        // 6. Offline snapshot exclusion blocks auth, OAuth, 2FA, tokens, and billing pages
+        assertTrue(com.example.data.remote.WebViewOfflineCacheHelper.isSensitiveNoSnapshotUrl("https://accounts.google.com/v3/signin"))
+        assertTrue(com.example.data.remote.WebViewOfflineCacheHelper.isSensitiveNoSnapshotUrl("https://github.com/settings/tokens"))
+        assertTrue(com.example.data.remote.WebViewOfflineCacheHelper.isSensitiveNoSnapshotUrl("https://vercel.com/login"))
+        assertTrue(com.example.data.remote.WebViewOfflineCacheHelper.isSensitiveNoSnapshotUrl("https://supabase.com/dashboard/account/tokens"))
+        assertFalse(com.example.data.remote.WebViewOfflineCacheHelper.isSensitiveNoSnapshotUrl("https://aistudio.google.com/prompts/new_chat"))
+        assertFalse(com.example.data.remote.WebViewOfflineCacheHelper.isSensitiveNoSnapshotUrl("https://github.com/IceCool30"))
+    }
+
+    @Test
+    fun `Phase 3 device input and transport hardening blocks malicious QR SSRF or downgrade payloads and marks clipboard prompts sensitive`() {
+        // 1. QR pairing parser rejects cloud metadata IPs, obfuscated IP encodings, backslash confusion, and HTTPS-only downgrades
+        assertNull(parseAntigravityPairingPayload("http://169.254.169.254/latest/meta-data"))
+        assertNull(parseAntigravityPairingPayload("http://2852039166/latest/meta-data"))
+        assertNull(parseAntigravityPairingPayload("http://[::ffff:169.254.169.254]/"))
+        assertNull(parseAntigravityPairingPayload("https://evil.com\\@aistudio.google.com"))
+        assertNull(parseAntigravityPairingPayload("""{"name":"Downgrade","url":"http://github.com/login"}"""))
+        assertNull(parseAntigravityPairingPayload("antigravity://pair?url=http%3A%2F%2Faistudio.google.com"))
+
+        // Legitimate HTTPS, WSS, WS, and private LAN HTTP endpoints remain supported
+        val validLan = parseAntigravityPairingPayload("""{"name":"Desk","url":"http://192.168.1.42:8080/remote","token":"tok123"}""")
+        assertNotNull(validLan)
+        assertEquals("http://192.168.1.42:8080/remote", validLan!!.endpointUrl)
+        val validWss = parseAntigravityPairingPayload("wss://host.tailnet.ts.net:8443/ws")
+        assertNotNull(validWss)
+        assertEquals("https://host.tailnet.ts.net:8443/ws", validWss!!.endpointUrl)
+
+        // 2. Sensitive clipboard helper attaches EXTRA_IS_SENSITIVE flag to prevent visual clipboard preview leaks
+        com.example.ui.screens.copySensitiveTextToClipboard(
+            context = context,
+            label = "Antigravity Prompt",
+            text = "Private production deployment checklist"
+        )
+        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val primaryClip = cm.primaryClip
+        assertNotNull(primaryClip)
+        assertEquals("Private production deployment checklist", primaryClip!!.getItemAt(0).text.toString())
+        val extras = primaryClip.description.extras
+        assertNotNull(extras)
+        assertTrue(extras!!.getBoolean("android.content.extra.IS_SENSITIVE", false))
+    }
+
+    @Test
+    fun `Light and Dark mode lighting guarantees WCAG AA contrast across all 12 presets, AI Studio accents, and filled button ink`() {
+        // Every official preset must achieve >= 4.5:1 accent contrast on Light Mode cards and >= 4.5:1 button ink contrast
+        OfficialAntigravityPresets.forEach { preset ->
+            val light = AppearanceSettings(
+                themeMode = AntigravityThemeMode.LIGHT,
+                presetName = preset.name,
+                backgroundHex = preset.backgroundHex,
+                foregroundHex = preset.foregroundHex,
+                accentHex = preset.accentHex
+            )
+            val accentOnSurface = com.example.ui.theme.contrastRatio(light.accentColor, light.surfaceColor)
+            assertTrue(
+                "Preset '${preset.name}' Light Mode accent contrast was $accentOnSurface (< 4.5)",
+                accentOnSurface >= 4.5f
+            )
+            val onAccentContrast = com.example.ui.theme.contrastRatio(light.onAccentColor, light.accentColor)
+            assertTrue(
+                "Preset '${preset.name}' Light Mode onAccent contrast was $onAccentContrast (< 4.5)",
+                onAccentContrast >= 4.5f
+            )
+            val fgOnSurface = com.example.ui.theme.contrastRatio(light.foregroundColor, light.surfaceColor)
+            assertTrue("Light Mode primary text contrast must exceed 10:1", fgOnSurface >= 10f)
+            val secondaryOnSurface = com.example.ui.theme.contrastRatio(light.secondaryTextColor, light.surfaceColor)
+            assertTrue("Light Mode secondary text contrast must exceed 4.5:1", secondaryOnSurface >= 4.5f)
+            val aiStudioOnSurface = com.example.ui.theme.contrastRatio(light.aiStudioAccentColor, light.surfaceColor)
+            assertTrue("Light Mode AI Studio accent contrast must exceed 4.5:1", aiStudioOnSurface >= 4.5f)
+            val successOnSurface = com.example.ui.theme.contrastRatio(light.successColor, light.surfaceColor)
+            assertTrue("Light Mode success color contrast must exceed 4.5:1", successOnSurface >= 4.5f)
+            val errorOnSurface = com.example.ui.theme.contrastRatio(light.errorColor, light.surfaceColor)
+            assertTrue("Light Mode error color contrast must exceed 4.5:1", errorOnSurface >= 4.5f)
+
+            // Dark Mode preserves authentic high-contrast presets and readable button ink
+            val dark = light.copy(themeMode = AntigravityThemeMode.DARK)
+            val darkAccentOnSurface = com.example.ui.theme.contrastRatio(dark.accentColor, dark.surfaceColor)
+            assertTrue(
+                "Preset '${preset.name}' Dark Mode accent contrast was $darkAccentOnSurface (< 4.5)",
+                darkAccentOnSurface >= 4.5f
+            )
+            val darkOnAccentContrast = com.example.ui.theme.contrastRatio(dark.onAccentColor, dark.accentColor)
+            assertTrue(
+                "Preset '${preset.name}' Dark Mode onAccent contrast was $darkOnAccentContrast (< 4.5)",
+                darkOnAccentContrast >= 4.5f
+            )
+        }
+
+        // Default Dark keeps exact #FFC799 unchanged with dark obsidian ink
+        val defaultDark = AppearanceSettings(themeMode = AntigravityThemeMode.DARK)
+        assertEquals(Color(0xFFFFC799), defaultDark.accentColor)
+        assertEquals(Color(0xFF070708), defaultDark.onAccentColor)
+
+        // Light Mode with Default Dark preset adapts #FFC799 into high-contrast rich amber with crisp White button ink
+        val defaultLight = AppearanceSettings(themeMode = AntigravityThemeMode.LIGHT)
+        assertEquals(Color.White, defaultLight.onAccentColor)
+        assertTrue(com.example.ui.theme.contrastRatio(defaultLight.accentColor, defaultLight.surfaceColor) >= 4.8f)
+    }
 }

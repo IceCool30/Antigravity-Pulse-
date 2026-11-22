@@ -1,5 +1,11 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import android.os.PersistableBundle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -53,11 +59,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -93,10 +97,10 @@ fun StorageAndCloudSyncScreen(
     onConnectHostUrl: (name: String, endpointUrl: String, authToken: String) -> Unit,
     onInsertPromptIntoRemote: (String) -> Unit,
     onOpenAddHostModal: () -> Unit,
-    onClearLocalData: () -> Unit = {}
+    onClearLocalData: () -> Unit = {},
+    onBeforeSignOut: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
     val surface = appearance.surfaceColor
@@ -105,6 +109,9 @@ fun StorageAndCloudSyncScreen(
     val fg = appearance.foregroundColor
     val secondaryFg = appearance.secondaryTextColor
     val accent = appearance.accentColor
+    val onAccent = appearance.onAccentColor
+    val successColor = appearance.successColor
+    val errorColor = appearance.errorColor
     val isFrostedGlass = appearance.isFrostedGlassEnabled
 
     val scope = rememberCoroutineScope()
@@ -153,7 +160,7 @@ fun StorageAndCloudSyncScreen(
                         showClearConfirmDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = CrimsonError,
+                        containerColor = errorColor,
                         contentColor = Color.White
                     )
                 ) {
@@ -187,8 +194,8 @@ fun StorageAndCloudSyncScreen(
                     .frostedGlass(
                         shape = hostCardShape,
                         baseColor = surface,
-                        tintColor = EmeraldOnline,
-                        borderColor = EmeraldOnline.copy(alpha = 0.55f),
+                        tintColor = successColor,
+                        borderColor = successColor.copy(alpha = 0.55f),
                         enabled = isFrostedGlass,
                         fillAlpha = 0.82f,
                         tintAlpha = 0.06f,
@@ -206,7 +213,7 @@ fun StorageAndCloudSyncScreen(
                             Icon(
                                 imageVector = Icons.Default.Storage,
                                 contentDescription = "Saved Remote Hosts",
-                                tint = EmeraldOnline,
+                                tint = successColor,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
@@ -214,7 +221,7 @@ fun StorageAndCloudSyncScreen(
                                 text = "Saved Remote Hosts (${localProfiles.size})",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = EmeraldOnline
+                                color = successColor
                             )
                         }
 
@@ -287,7 +294,7 @@ fun StorageAndCloudSyncScreen(
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = accent,
-                                        contentColor = Color(0xFF070708)
+                                        contentColor = onAccent
                                     )
                                 ) {
                                     Icon(
@@ -306,7 +313,7 @@ fun StorageAndCloudSyncScreen(
                             onClick = { showClearConfirmDialog = true },
                             modifier = Modifier.testTag("clear_local_cache_button")
                         ) {
-                            Text("Reset Local Saved Data", color = CrimsonError)
+                            Text("Reset Local Saved Data", color = errorColor)
                         }
                     }
                 }
@@ -363,7 +370,7 @@ fun StorageAndCloudSyncScreen(
                             Text(
                                 text = authError.orEmpty(),
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = CrimsonError
+                                color = errorColor
                             )
                         }
 
@@ -387,7 +394,7 @@ fun StorageAndCloudSyncScreen(
                             enabled = !isSigningIn,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = accent,
-                                contentColor = Color(0xFF070708)
+                                contentColor = onAccent
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -396,7 +403,7 @@ fun StorageAndCloudSyncScreen(
                             if (isSigningIn) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(20.dp),
-                                    color = Color(0xFF070708),
+                                    color = onAccent,
                                     strokeWidth = 2.dp
                                 )
                             } else {
@@ -436,13 +443,15 @@ fun StorageAndCloudSyncScreen(
                         cloudViewModel = cloudViewModel,
                         onConnectHostUrl = onConnectHostUrl,
                         onInsertPromptIntoRemote = { promptText ->
-                            clipboardManager.setText(AnnotatedString(promptText))
+                            copySensitiveTextToClipboard(context, "Antigravity Prompt", promptText)
                             onInsertPromptIntoRemote(promptText)
                         },
                         onSignOut = {
                             signOutFromGoogle(
+                                context = context,
                                 credentialManager = credentialManager,
-                                scope = scope
+                                scope = scope,
+                                onBeforeSignOut = onBeforeSignOut
                             )
                         }
                     )
@@ -450,6 +459,26 @@ fun StorageAndCloudSyncScreen(
             }
         }
     }
+}
+
+/**
+ * Copies user-authored prompt text to the Android clipboard marked as sensitive so Android 13+
+ * suppresses plain-text visual clipboard previews and keyboard suggestion exposure.
+ */
+internal fun copySensitiveTextToClipboard(context: Context, label: String, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    val clip = ClipData.newPlainText(label, text).apply {
+        val extras = PersistableBundle().apply {
+            val key = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ClipDescription.EXTRA_IS_SENSITIVE
+            } else {
+                "android.content.extra.IS_SENSITIVE"
+            }
+            putBoolean(key, true)
+        }
+        description.extras = extras
+    }
+    cm.setPrimaryClip(clip)
 }
 
 @Composable
@@ -478,6 +507,9 @@ private fun AuthenticatedCloudSyncPanel(
     val context = LocalContext.current
     val currentAppearance = LocalAppearanceSettings.current
     val isFrostedGlass = currentAppearance.isFrostedGlassEnabled
+    val onAccent = currentAppearance.onAccentColor
+    val successColor = currentAppearance.successColor
+    val errorColor = currentAppearance.errorColor
 
     LaunchedEffect(syncMessage) {
         val msg = syncMessage?.trim().orEmpty()
@@ -569,7 +601,7 @@ private fun AuthenticatedCloudSyncPanel(
                         enabled = !isSyncing,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = accent,
-                            contentColor = Color(0xFF070708)
+                            contentColor = onAccent
                         ),
                         modifier = Modifier
                             .weight(1f)
@@ -613,7 +645,7 @@ private fun AuthenticatedCloudSyncPanel(
                     Text(
                         text = syncMessage.orEmpty(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = EmeraldOnline
+                        color = successColor
                     )
                 }
 
@@ -631,7 +663,7 @@ private fun AuthenticatedCloudSyncPanel(
                     is CloudUiState.Error -> Text(
                         "Cloud Hosts Error: ${pState.message}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = CrimsonError
+                        color = errorColor
                     )
                     is CloudUiState.Success -> {
                         Text(
@@ -801,7 +833,7 @@ private fun AuthenticatedCloudSyncPanel(
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = accent,
-                            contentColor = Color(0xFF070708)
+                            contentColor = onAccent
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -822,7 +854,7 @@ private fun AuthenticatedCloudSyncPanel(
                     is CloudUiState.Error -> Text(
                         "Cloud Prompts Error: ${prState.message}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = CrimsonError
+                        color = errorColor
                     )
                     is CloudUiState.Success -> {
                         if (prState.data.isEmpty()) {
@@ -860,7 +892,7 @@ private fun AuthenticatedCloudSyncPanel(
                                             Icon(
                                                 imageVector = Icons.Default.DeleteOutline,
                                                 contentDescription = "Delete Prompt",
-                                                tint = CrimsonError,
+                                                tint = errorColor,
                                                 modifier = Modifier.size(20.dp)
                                             )
                                         }
@@ -882,7 +914,7 @@ private fun AuthenticatedCloudSyncPanel(
                                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = accent,
-                                                contentColor = Color(0xFF070708)
+                                                contentColor = onAccent
                                             )
                                         ) {
                                             Icon(

@@ -67,8 +67,8 @@ import com.example.notifications.PulseNotificationManager
 import com.example.ui.theme.AppearanceSettings
 import com.example.ui.theme.AvailableAntigravityFonts
 import com.example.ui.theme.AvailableFontSizesPx
-import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.JetBrainsMonoFontFamily
+import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.parseHexColor
 
 @Composable
@@ -396,13 +396,14 @@ internal fun SettingsCustomizeAppearanceBlock(
                                 .padding(14.dp)
                                 .testTag("code_preview_box")
                         ) {
+                            val activeTheme = LocalAppearanceSettings.current
                             val codeFontSize = (settings.fontSizePx + 1).sp
                             Text(
                                 text = buildAnnotatedString {
                                     withStyle(SpanStyle(color = secondaryFg)) {
                                         append("// Greet a user by name\n")
                                     }
-                                    withStyle(SpanStyle(color = Color(0xFF56B6C2))) {
+                                    withStyle(SpanStyle(color = activeTheme.codeKeywordColor)) {
                                         append("const ")
                                     }
                                     withStyle(SpanStyle(color = accent)) {
@@ -420,16 +421,16 @@ internal fun SettingsCustomizeAppearanceBlock(
                                     withStyle(SpanStyle(color = fg)) {
                                         append(") => {\n  ")
                                     }
-                                    withStyle(SpanStyle(color = Color(0xFF56B6C2))) {
+                                    withStyle(SpanStyle(color = activeTheme.codeKeywordColor)) {
                                         append("return ")
                                     }
-                                    withStyle(SpanStyle(color = Color(0xFF98C379))) {
+                                    withStyle(SpanStyle(color = activeTheme.codeStringColor)) {
                                         append("`Hello, \${")
                                     }
                                     withStyle(SpanStyle(color = fg)) {
                                         append("name")
                                     }
-                                    withStyle(SpanStyle(color = Color(0xFF98C379))) {
+                                    withStyle(SpanStyle(color = activeTheme.codeStringColor)) {
                                         append("}!`")
                                     }
                                     withStyle(SpanStyle(color = fg)) {
@@ -643,6 +644,7 @@ private fun CompactPermissionStatusRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        val grantedGreen = LocalAppearanceSettings.current.successColor
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.weight(1f)
@@ -650,7 +652,7 @@ private fun CompactPermissionStatusRow(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (isGranted) EmeraldOnline else accent,
+                tint = if (isGranted) grantedGreen else accent,
                 modifier = Modifier.size(19.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -668,20 +670,20 @@ private fun CompactPermissionStatusRow(
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
-                    .background(EmeraldOnline.copy(alpha = 0.12f))
+                    .background(grantedGreen.copy(alpha = 0.12f))
                     .padding(horizontal = 10.dp, vertical = 5.dp)
                     .testTag(grantedTag)
             ) {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = "$label $grantedLabel",
-                    tint = EmeraldOnline,
+                    tint = grantedGreen,
                     modifier = Modifier.size(14.dp)
                 )
                 Text(
                     text = grantedLabel,
                     style = MaterialTheme.typography.labelSmall,
-                    color = EmeraldOnline,
+                    color = grantedGreen,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -827,7 +829,7 @@ internal fun SettingsDeveloperCard(
                                     val intent = Intent(
                                         Intent.ACTION_VIEW,
                                         Uri.parse("https://github.com/$cleanGithubHandle")
-                                    )
+                                    ).addCategory(Intent.CATEGORY_BROWSABLE)
                                     context.startActivity(intent)
                                 } catch (_: Exception) {
                                 }

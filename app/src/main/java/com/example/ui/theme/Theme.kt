@@ -77,11 +77,15 @@ fun AntigravityPulseTheme(
         val fg = effectiveAppearance.foregroundColor
         val secondaryFg = effectiveAppearance.secondaryTextColor
         val accent = effectiveAppearance.accentColor
+        val onAccent = effectiveAppearance.onAccentColor
         val border = effectiveAppearance.borderColor
+        val success = effectiveAppearance.successColor
+        val error = effectiveAppearance.errorColor
 
         if (dynamicScheme != null) {
             dynamicScheme.copy(
                 primary = accent,
+                onPrimary = onAccent,
                 background = bg,
                 onBackground = fg,
                 surface = if (isDark) surface else dynamicScheme.surface,
@@ -89,20 +93,21 @@ fun AntigravityPulseTheme(
                 surfaceVariant = if (isDark) elevated else dynamicScheme.surfaceVariant,
                 onSurfaceVariant = secondaryFg,
                 outline = border,
-                error = CrimsonError,
+                tertiary = success,
+                error = error,
                 onError = Color.White
             )
         } else if (isDark) {
             darkColorScheme(
                 primary = accent,
-                onPrimary = Color(0xFF070708),
+                onPrimary = onAccent,
                 primaryContainer = surface,
                 onPrimaryContainer = accent,
                 secondary = NeuralViolet,
                 onSecondary = Color.White,
                 secondaryContainer = elevated,
                 onSecondaryContainer = fg,
-                tertiary = EmeraldOnline,
+                tertiary = success,
                 onTertiary = Color(0xFF070708),
                 background = bg,
                 onBackground = fg,
@@ -111,20 +116,20 @@ fun AntigravityPulseTheme(
                 surfaceVariant = elevated,
                 onSurfaceVariant = secondaryFg,
                 outline = border,
-                error = CrimsonError,
+                error = error,
                 onError = Color.White
             )
         } else {
             lightColorScheme(
                 primary = accent,
-                onPrimary = Color(0xFF070708),
+                onPrimary = onAccent,
                 primaryContainer = surface,
                 onPrimaryContainer = Color(0xFF0F172A),
-                secondary = NeuralViolet,
+                secondary = Color(0xFF6D28D9),
                 onSecondary = Color.White,
                 secondaryContainer = elevated,
                 onSecondaryContainer = fg,
-                tertiary = EmeraldOnline,
+                tertiary = success,
                 onTertiary = Color.White,
                 background = bg,
                 onBackground = fg,
@@ -133,7 +138,7 @@ fun AntigravityPulseTheme(
                 surfaceVariant = elevated,
                 onSurfaceVariant = secondaryFg,
                 outline = border,
-                error = CrimsonError,
+                error = error,
                 onError = Color.White
             )
         }

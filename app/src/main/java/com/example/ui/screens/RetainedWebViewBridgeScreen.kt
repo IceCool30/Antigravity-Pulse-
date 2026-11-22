@@ -52,6 +52,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -76,14 +77,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.draw.shadow
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
 import com.example.ui.components.OfflineContinuityOverlay
-import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
-
-private val AiStudioSkyAccent = Color(0xFF7DD3FC)
 
 @Composable
 fun RetainedWebViewBridgeScreen(
@@ -102,9 +101,12 @@ fun RetainedWebViewBridgeScreen(
     val surface = appearance.surfaceColor
     val secondaryFg = appearance.secondaryTextColor
     val accent = appearance.accentColor
+    val onAccent = appearance.onAccentColor
+    val successColor = appearance.successColor
     val loadProgress by RetainedWebViewManager.pageLoadProgress.collectAsStateWithLifecycle()
     val hasActiveSession by RetainedWebViewManager.hasActiveSessionState.collectAsStateWithLifecycle()
     val continuity by RetainedWebViewManager.continuityState.collectAsStateWithLifecycle()
+    val rendererGeneration by RetainedWebViewManager.rendererGeneration.collectAsStateWithLifecycle()
 
     val effectiveEndpoint = telemetry.activeEndpoint.trim()
         .ifBlank { savedFallbackEndpoint.trim() }
@@ -196,7 +198,7 @@ fun RetainedWebViewBridgeScreen(
                         Icon(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = "Load or Refresh Remote URL",
-                            tint = Color(0xFF000000)
+                            tint = onAccent
                         )
                     }
                 }
@@ -226,8 +228,8 @@ fun RetainedWebViewBridgeScreen(
                             }
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = EmeraldOnline.copy(alpha = 0.2f),
-                            selectedLabelColor = EmeraldOnline
+                            selectedContainerColor = successColor.copy(alpha = 0.16f),
+                            selectedLabelColor = successColor
                         ),
                         modifier = Modifier.testTag("dom_lag_booster_chip")
                     )
@@ -258,26 +260,28 @@ fun RetainedWebViewBridgeScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            // Full-bleed Memory-Pinned WebView Instance
-            AndroidView(
-                factory = { context ->
-                    RetainedWebViewManager.obtainPinnedWebView(
-                        context = context,
-                        endpointUrl = effectiveEndpoint,
-                        domLagBooster = telemetry.domLagBoosterEnabled,
-                        onJsBridgeMessage = onJsBridgeEvent
-                    )
-                },
-                update = { _ ->
-                    // No-op on recomposition so the WebView never reloads when switching tabs
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("retained_webview_container")
-            )
-
-            // Offline visual snapshot cache & frosted reconnect pill (active only on live sessions)
             if (!showNativeWelcome) {
+                // Full-bleed Memory-Pinned WebView Instance (only mounted once a remote host is active)
+                key(rendererGeneration) {
+                    AndroidView(
+                        factory = { context ->
+                            RetainedWebViewManager.obtainPinnedWebView(
+                                context = context,
+                                endpointUrl = effectiveEndpoint,
+                                domLagBooster = telemetry.domLagBoosterEnabled,
+                                onJsBridgeMessage = onJsBridgeEvent
+                            )
+                        },
+                        update = { _ ->
+                            // No-op on recomposition so the WebView never reloads when switching tabs
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("retained_webview_container")
+                    )
+                }
+
+                // Offline visual snapshot cache & frosted reconnect pill (active only on live sessions)
                 OfflineContinuityOverlay(
                     continuity = continuity,
                     workspaceLabel = "Antigravity Remote",
@@ -316,6 +320,7 @@ private fun NativeWelcomeLandingScreen(
     onLaunchAiStudio: () -> Unit
 ) {
     val appearance = LocalAppearanceSettings.current
+    val isLightMode = appearance.isLightMode
     val bg = appearance.backgroundColor
     val surface = appearance.surfaceColor
     val elevated = appearance.elevatedSurfaceColor
@@ -323,10 +328,12 @@ private fun NativeWelcomeLandingScreen(
     val fg = appearance.foregroundColor
     val secondaryFg = appearance.secondaryTextColor
     val accent = appearance.accentColor
+    val onAccent = appearance.onAccentColor
+    val aiStudioAccent = appearance.aiStudioAccentColor
     val isFrostedGlass = appearance.isFrostedGlassEnabled
 
     var selectedGuideTab by rememberSaveable { mutableIntStateOf(0) }
-    val activeAccent = if (selectedGuideTab == 0) accent else AiStudioSkyAccent
+    val activeAccent = if (selectedGuideTab == 0) accent else aiStudioAccent
 
     val remoteGuideItems = listOf(
         WelcomeGuideItem(
@@ -369,12 +376,12 @@ private fun NativeWelcomeLandingScreen(
             .fillMaxSize()
             .background(bg)
             .drawBehind {
-                // Subtle editorial radial aura at the top — adds depth without visual noise
+                // Subtle editorial radial aura at the top — calibrated separately for Light & Dark
                 drawCircle(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            activeAccent.copy(alpha = 0.11f),
-                            activeAccent.copy(alpha = 0.03f),
+                            activeAccent.copy(alpha = if (isLightMode) 0.08f else 0.11f),
+                            activeAccent.copy(alpha = if (isLightMode) 0.02f else 0.03f),
                             Color.Transparent
                         ),
                         center = Offset(size.width * 0.5f, size.height * 0.14f),
@@ -400,7 +407,8 @@ private fun NativeWelcomeLandingScreen(
             WelcomeBrandEmblem(
                 accent = activeAccent,
                 surface = surface,
-                border = border
+                border = border,
+                isLightMode = isLightMode
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -428,19 +436,32 @@ private fun NativeWelcomeLandingScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             // 2. Single Uncluttered Guide Card with Segmented Remote / AI Studio Switcher
+            val guideCardShape = RoundedCornerShape(22.dp)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 460.dp)
+                    .then(
+                        if (isLightMode) {
+                            Modifier.shadow(
+                                elevation = 8.dp,
+                                shape = guideCardShape,
+                                ambientColor = Color(0xFF0F172A).copy(alpha = 0.10f),
+                                spotColor = Color(0xFF0F172A).copy(alpha = 0.12f)
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
                     .frostedGlass(
-                        shape = RoundedCornerShape(22.dp),
+                        shape = guideCardShape,
                         baseColor = surface,
                         tintColor = activeAccent,
                         borderColor = border,
                         enabled = isFrostedGlass,
-                        fillAlpha = 0.72f,
+                        fillAlpha = if (isLightMode) 0.96f else 0.72f,
                         tintAlpha = 0.04f,
-                        borderAlpha = 0.45f
+                        borderAlpha = if (isLightMode) 0.62f else 0.45f
                     )
                     .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -450,8 +471,12 @@ private fun NativeWelcomeLandingScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
-                        .background(bg.copy(alpha = 0.65f))
-                        .border(1.dp, border.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                        .background(if (isLightMode) elevated else bg.copy(alpha = 0.65f))
+                        .border(
+                            width = 1.dp,
+                            color = border.copy(alpha = if (isLightMode) 0.55f else 0.35f),
+                            shape = RoundedCornerShape(14.dp)
+                        )
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -461,7 +486,8 @@ private fun NativeWelcomeLandingScreen(
                         activeColor = accent,
                         fg = fg,
                         secondaryFg = secondaryFg,
-                        elevated = elevated,
+                        selectedSurface = if (isLightMode) surface else elevated,
+                        isLightMode = isLightMode,
                         onClick = { selectedGuideTab = 0 },
                         modifier = Modifier
                             .weight(1f)
@@ -470,10 +496,11 @@ private fun NativeWelcomeLandingScreen(
                     WelcomeSegmentTab(
                         label = "AI Studio",
                         selected = selectedGuideTab == 1,
-                        activeColor = AiStudioSkyAccent,
+                        activeColor = aiStudioAccent,
                         fg = fg,
                         secondaryFg = secondaryFg,
-                        elevated = elevated,
+                        selectedSurface = if (isLightMode) surface else elevated,
+                        isLightMode = isLightMode,
                         onClick = { selectedGuideTab = 1 },
                         modifier = Modifier
                             .weight(1f)
@@ -490,7 +517,7 @@ private fun NativeWelcomeLandingScreen(
                     label = "welcome_guide_content"
                 ) { tabIndex ->
                     val items = if (tabIndex == 0) remoteGuideItems else aiStudioGuideItems
-                    val itemTint = if (tabIndex == 0) accent else AiStudioSkyAccent
+                    val itemTint = if (tabIndex == 0) accent else aiStudioAccent
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -510,7 +537,10 @@ private fun NativeWelcomeLandingScreen(
                     }
                 }
 
-                HorizontalDivider(color = border.copy(alpha = 0.35f), thickness = 1.dp)
+                HorizontalDivider(
+                    color = border.copy(alpha = if (isLightMode) 0.55f else 0.35f),
+                    thickness = 1.dp
+                )
 
                 // Quiet, single-line secondary QR pairing link (no competing button clutter)
                 Row(
@@ -554,11 +584,14 @@ private fun NativeWelcomeLandingScreen(
         }
 
         // 3. Single, Focused Bottom Launch Dock — Two Clear Primary Actions
-        HorizontalDivider(color = border.copy(alpha = 0.35f), thickness = 1.dp)
+        HorizontalDivider(
+            color = border.copy(alpha = if (isLightMode) 0.65f else 0.35f),
+            thickness = 1.dp
+        )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(bg.copy(alpha = 0.94f))
+                .background(if (isLightMode) surface else bg.copy(alpha = 0.94f))
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -573,7 +606,7 @@ private fun NativeWelcomeLandingScreen(
                     onClick = onLaunchRemote,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = accent,
-                        contentColor = Color(0xFF000000)
+                        contentColor = onAccent
                     ),
                     shape = RoundedCornerShape(16.dp),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
@@ -600,28 +633,32 @@ private fun NativeWelcomeLandingScreen(
                 Button(
                     onClick = onLaunchAiStudio,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = surface,
-                        contentColor = AiStudioSkyAccent
+                        containerColor = if (isLightMode) aiStudioAccent.copy(alpha = 0.10f) else surface,
+                        contentColor = aiStudioAccent
                     ),
                     shape = RoundedCornerShape(16.dp),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(50.dp)
-                        .border(1.dp, AiStudioSkyAccent.copy(alpha = 0.42f), RoundedCornerShape(16.dp))
+                        .border(
+                            width = if (isLightMode) 1.25.dp else 1.dp,
+                            color = aiStudioAccent.copy(alpha = if (isLightMode) 0.65f else 0.42f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
                         .testTag("welcome_bottom_launch_ai_studio_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.AutoAwesome,
                         contentDescription = null,
-                        tint = AiStudioSkyAccent,
+                        tint = aiStudioAccent,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "AI Studio",
                         style = MaterialTheme.typography.labelLarge,
-                        color = AiStudioSkyAccent,
+                        color = aiStudioAccent,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -636,14 +673,27 @@ private fun NativeWelcomeLandingScreen(
 private fun WelcomeBrandEmblem(
     accent: Color,
     surface: Color,
-    border: Color
+    border: Color,
+    isLightMode: Boolean
 ) {
+    val emblemShape = RoundedCornerShape(18.dp)
     Box(
         modifier = Modifier
             .size(56.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .then(
+                if (isLightMode) {
+                    Modifier.shadow(
+                        elevation = 4.dp,
+                        shape = emblemShape,
+                        ambientColor = Color(0xFF0F172A).copy(alpha = 0.12f)
+                    )
+                } else {
+                    Modifier
+                }
+            )
+            .clip(emblemShape)
             .background(surface)
-            .border(1.dp, border.copy(alpha = 0.65f), RoundedCornerShape(18.dp)),
+            .border(1.dp, border.copy(alpha = if (isLightMode) 0.85f else 0.65f), emblemShape),
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.size(28.dp)) {
@@ -651,7 +701,7 @@ private fun WelcomeBrandEmblem(
             val h = size.height
             // Crisp Antigravity pulse waveform & orbital arc drawn at full native DPI
             drawCircle(
-                color = accent.copy(alpha = 0.22f),
+                color = accent.copy(alpha = if (isLightMode) 0.30f else 0.22f),
                 radius = w * 0.46f,
                 style = Stroke(width = 1.6.dp.toPx())
             )
@@ -683,18 +733,31 @@ private fun WelcomeSegmentTab(
     activeColor: Color,
     fg: Color,
     secondaryFg: Color,
-    elevated: Color,
+    selectedSurface: Color,
+    isLightMode: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val tabShape = RoundedCornerShape(10.dp)
     Box(
         modifier = modifier
             .height(48.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) elevated else Color.Transparent)
+            .then(
+                if (selected && isLightMode) {
+                    Modifier.shadow(2.dp, tabShape, ambientColor = Color(0xFF0F172A).copy(alpha = 0.10f))
+                } else {
+                    Modifier
+                }
+            )
+            .clip(tabShape)
+            .background(if (selected) selectedSurface else Color.Transparent)
             .then(
                 if (selected) {
-                    Modifier.border(1.dp, activeColor.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                    Modifier.border(
+                        width = if (isLightMode) 1.25.dp else 1.dp,
+                        color = activeColor.copy(alpha = if (isLightMode) 0.55f else 0.35f),
+                        shape = tabShape
+                    )
                 } else {
                     Modifier
                 }

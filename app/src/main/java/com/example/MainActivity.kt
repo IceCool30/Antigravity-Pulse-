@@ -75,10 +75,12 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Settings
@@ -109,9 +111,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -124,23 +128,31 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.cloud.authStateFlow
+import com.example.data.cloud.clearFirestoreLocalCache
 import com.example.data.cloud.configureAppCheck
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
 import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
 import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.DevWebWorkspace
 import com.example.data.remote.DevWebWorkspaceRegistry
+import com.example.data.remote.PulseBrowserManager
 import com.example.data.remote.RetainedWebViewManager
 import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.notifications.PulseNotificationManager
@@ -149,6 +161,7 @@ import com.example.ui.components.MovableFloatingControlPanel
 import com.example.ui.screens.AiStudioWebScreen
 import com.example.ui.screens.AppearanceSettingsSheet
 import com.example.ui.screens.PinnedWebWorkspaceScreen
+import com.example.ui.screens.PulseBrowserScreen
 import com.example.ui.screens.QrPairingScannerDialog
 import com.example.ui.screens.RetainedWebViewBridgeScreen
 import com.example.ui.screens.StorageAndCloudSyncScreen
@@ -175,14 +188,23 @@ class MainActivity : FragmentActivity() {
         configureAppCheck(this, intent)
         PulseNotificationManager.ensureChannelsCreated(this)
 
+        // Apply FLAG_SECURE synchronously before the first frame renders so Recents/screenshots cannot capture pre-lock UI
+        val initialAppearanceManager = AppearancePreferencesManager(this)
+        if (initialAppearanceManager.settings.value.isBiometricLockEnabled) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE
+            )
+        }
+
         enableEdgeToEdge()
 
         setContent {
-            val context = LocalContext.current
-            val appearanceManager = remember { AppearancePreferencesManager(context) }
+            val appearanceManager = remember { initialAppearanceManager }
             val appearance by appearanceManager.settings.collectAsStateWithLifecycle()
-            var isBiometricUnlocked by rememberSaveable { mutableStateOf(!appearance.isBiometricLockEnabled) }
-            var hasUnlockedOnce by rememberSaveable { mutableStateOf(!appearance.isBiometricLockEnabled) }
+            // Keep unlock state strictly in RAM (never rememberSaveable) so process death / state restoration cannot bypass the lock
+            var isBiometricUnlocked by remember { mutableStateOf(!appearance.isBiometricLockEnabled) }
+            var hasUnlockedOnce by remember { mutableStateOf(!appearance.isBiometricLockEnabled) }
 
             DisposableEffect(appearance.isBiometricLockEnabled) {
                 relockCallback = if (appearance.isBiometricLockEnabled) {
@@ -206,19 +228,31 @@ class MainActivity : FragmentActivity() {
             }
 
             AntigravityPulseTheme(appearance = appearance) {
+                val isLockGateActive = appearance.isBiometricLockEnabled && !isBiometricUnlocked
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Keep the live remote session mounted once unlocked so returning from
-                    // background/biometric lock drops straight back into the exact active session.
+                    // background/biometric lock drops straight back into the exact active session,
+                    // while stripping accessibility semantics from the obscured layer while locked.
                     if (!appearance.isBiometricLockEnabled || isBiometricUnlocked || hasUnlockedOnce) {
-                        AntigravityPulseApp(
-                            appearance = appearance,
-                            onUpdateAppearance = appearanceManager::update,
-                            onSelectPreset = appearanceManager::applyPreset,
-                            onResetPreset = appearanceManager::resetToDefaultDark
-                        )
+                        Box(
+                            modifier = if (isLockGateActive) {
+                                Modifier
+                                    .fillMaxSize()
+                                    .clearAndSetSemantics {}
+                            } else {
+                                Modifier.fillMaxSize()
+                            }
+                        ) {
+                            AntigravityPulseApp(
+                                appearance = appearance,
+                                onUpdateAppearance = appearanceManager::update,
+                                onSelectPreset = appearanceManager::applyPreset,
+                                onResetPreset = appearanceManager::resetToDefaultDark
+                            )
+                        }
                     }
 
-                    if (appearance.isBiometricLockEnabled && !isBiometricUnlocked) {
+                    if (isLockGateActive) {
                         BiometricLockGateScreen(
                             activity = this@MainActivity,
                             appearance = appearance,
@@ -245,6 +279,7 @@ class MainActivity : FragmentActivity() {
         RetainedWebViewManager.keepTimersRunning()
         AiStudioPinnedWebViewManager.keepTimersRunning()
         DevWebWorkspaceRegistry.keepTimersRunningAll()
+        PulseBrowserManager.keepTimersRunningAll()
     }
 
     override fun onPause() {
@@ -255,6 +290,8 @@ class MainActivity : FragmentActivity() {
         AiStudioPinnedWebViewManager.keepTimersRunning()
         DevWebWorkspaceRegistry.flushCookiesAll()
         DevWebWorkspaceRegistry.keepTimersRunningAll()
+        PulseBrowserManager.flushCookiesAll()
+        PulseBrowserManager.keepTimersRunningAll()
         super.onPause()
     }
 
@@ -326,6 +363,11 @@ private fun BiometricLockGateScreen(
         prompt.authenticate(promptInfo)
     }
 
+    // Intercept hardware/gesture Back so locked state cannot mutate underlying app navigation
+    BackHandler(enabled = true) {
+        activity.moveTaskToBack(true)
+    }
+
     LaunchedEffect(Unit) {
         if (canAuthenticateStatus == BiometricManager.BIOMETRIC_SUCCESS) {
             launchBiometricPrompt()
@@ -335,7 +377,14 @@ private fun BiometricLockGateScreen(
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .background(bg),
+            .background(bg)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            },
         contentWindowInsets = WindowInsets.safeDrawing
     ) { innerPadding ->
         Box(
@@ -408,7 +457,7 @@ private fun BiometricLockGateScreen(
                     onClick = { launchBiometricPrompt() },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = accent,
-                        contentColor = Color(0xFF000000)
+                        contentColor = activeTheme.onAccentColor
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -448,9 +497,11 @@ private enum class PulseTab(
 ) {
     WEB_BRIDGE(R.string.nav_bridge, R.string.nav_bridge, Icons.Default.Language, "nav_tab_bridge"),
     AI_STUDIO(R.string.nav_ai_studio, R.string.nav_ai_studio, Icons.Default.AutoAwesome, "nav_tab_ai_studio"),
+    GEMINI(R.string.nav_gemini, R.string.nav_gemini, Icons.Default.Forum, "nav_tab_gemini", DevWebWorkspace.GEMINI),
     GITHUB(R.string.nav_github, R.string.nav_github, Icons.Default.Code, "nav_tab_github", DevWebWorkspace.GITHUB),
     VERCEL(R.string.nav_vercel, R.string.nav_vercel, Icons.Default.RocketLaunch, "nav_tab_vercel", DevWebWorkspace.VERCEL),
     SUPABASE(R.string.nav_supabase, R.string.nav_supabase, Icons.Default.Storage, "nav_tab_supabase", DevWebWorkspace.SUPABASE),
+    BROWSER(R.string.nav_browser, R.string.nav_browser, Icons.Default.Public, "nav_tab_browser"),
     STORAGE_SYNC(R.string.nav_sync, R.string.nav_sync_short, Icons.Default.CloudSync, "nav_tab_sync")
 }
 
@@ -524,15 +575,23 @@ fun AntigravityPulseApp(
     val githubSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GITHUB) }
     val vercelSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.VERCEL) }
     val supabaseSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.SUPABASE) }
+    val geminiSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GEMINI) }
     val githubCanGoBack by githubSession.canGoBackState.collectAsStateWithLifecycle()
     val vercelCanGoBack by vercelSession.canGoBackState.collectAsStateWithLifecycle()
     val supabaseCanGoBack by supabaseSession.canGoBackState.collectAsStateWithLifecycle()
+    val geminiCanGoBack by geminiSession.canGoBackState.collectAsStateWithLifecycle()
     val githubActiveShortcut by githubSession.activeShortcutId.collectAsStateWithLifecycle()
     val vercelActiveShortcut by vercelSession.activeShortcutId.collectAsStateWithLifecycle()
     val supabaseActiveShortcut by supabaseSession.activeShortcutId.collectAsStateWithLifecycle()
+    val geminiActiveShortcut by geminiSession.activeShortcutId.collectAsStateWithLifecycle()
     val githubDesktopMode by githubSession.isDesktopModeState.collectAsStateWithLifecycle()
     val vercelDesktopMode by vercelSession.isDesktopModeState.collectAsStateWithLifecycle()
     val supabaseDesktopMode by supabaseSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val geminiDesktopMode by geminiSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val browserTabs by PulseBrowserManager.tabs.collectAsStateWithLifecycle()
+    val browserActiveTabId by PulseBrowserManager.activeTabId.collectAsStateWithLifecycle()
+    val isBrowserBarVisible by PulseBrowserManager.isAddressBarVisible.collectAsStateWithLifecycle()
+    val activeBrowserTab = browserTabs.firstOrNull { it.id == browserActiveTabId } ?: browserTabs.first()
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(PulseTab.WEB_BRIDGE.ordinal) }
     var showAppearanceSheet by rememberSaveable { mutableStateOf(false) }
@@ -639,6 +698,8 @@ fun AntigravityPulseApp(
     // Native Android Runtime Permission Bridge for WebView Microphone (Voice Input) & Camera
     var permissionsRefreshTick by remember { mutableIntStateOf(0) }
     var pendingWebPermissionRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+    var pendingOriginMediaConfirmRequest by remember { mutableStateOf<PermissionRequest?>(null) }
+    val latestActiveEndpoint by rememberUpdatedState(telemetry.activeEndpoint)
 
     val runtimePermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -676,39 +737,128 @@ fun AntigravityPulseApp(
         }
     }
 
+    fun proceedWithApprovedWebMediaRequest(request: PermissionRequest) {
+        val (allowedResources, neededPerms) = resolveAllowedWebResourcesAndPermissions(request.resources)
+        if (allowedResources.isEmpty()) {
+            try {
+                request.deny()
+            } catch (_: Exception) {
+            }
+            return
+        }
+        val missingPerms = neededPerms.filter { perm ->
+            ContextCompat.checkSelfPermission(context, perm) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missingPerms.isEmpty()) {
+            try {
+                request.grant(allowedResources.toTypedArray())
+            } catch (_: Exception) {
+            }
+        } else {
+            pendingWebPermissionRequest?.let { stale ->
+                try {
+                    stale.deny()
+                } catch (_: Exception) {
+                }
+            }
+            pendingWebPermissionRequest = request
+            runtimePermissionsLauncher.launch(missingPerms.toTypedArray())
+        }
+    }
+
+    // Explicit per-origin confirmation dialog for third-party websites requesting Microphone/Camera
+    // so random sites in Pulse Browser cannot silently hijack hardware once Android permissions are granted.
+    pendingOriginMediaConfirmRequest?.let { pendingReq ->
+        val originStr = pendingReq.origin?.toString().orEmpty()
+        val displayHost = try {
+            Uri.parse(originStr).host?.takeIf { it.isNotBlank() } ?: originStr
+        } catch (_: Exception) {
+            originStr
+        }
+        val (allowedRes, _) = resolveAllowedWebResourcesAndPermissions(pendingReq.resources)
+        val asksAudio = allowedRes.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+        val asksVideo = allowedRes.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+        val hardwareLabel = when {
+            asksAudio && asksVideo -> "Camera and Microphone"
+            asksVideo -> "Camera"
+            else -> "Microphone"
+        }
+        AlertDialog(
+            onDismissRequest = {
+                try {
+                    pendingReq.deny()
+                } catch (_: Exception) {
+                }
+                pendingOriginMediaConfirmRequest = null
+            },
+            title = {
+                Text(
+                    text = "Allow $hardwareLabel Access?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "The website \"$displayHost\" wants to use your device $hardwareLabel. Only allow sites you trust."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingOriginMediaConfirmRequest = null
+                        proceedWithApprovedWebMediaRequest(pendingReq)
+                    },
+                    modifier = Modifier.testTag("web_media_origin_allow_button")
+                ) {
+                    Text("Allow Once")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        try {
+                            pendingReq.deny()
+                        } catch (_: Exception) {
+                        }
+                        pendingOriginMediaConfirmRequest = null
+                    },
+                    modifier = Modifier.testTag("web_media_origin_deny_button")
+                ) {
+                    Text("Deny")
+                }
+            }
+        )
+    }
+
     DisposableEffect(Unit) {
         RetainedWebViewManager.onWebPermissionRequestHandler = { request ->
-            val (allowedResources, neededPerms) = resolveAllowedWebResourcesAndPermissions(request.resources)
-            if (allowedResources.isEmpty()) {
+            val (allowedResources, _) = resolveAllowedWebResourcesAndPermissions(request.resources)
+            val originUrl = request.origin?.toString().orEmpty()
+            if (allowedResources.isEmpty() || !RetainedWebViewManager.isSecureMediaOrigin(originUrl)) {
                 try {
                     request.deny()
                 } catch (_: Exception) {
                 }
+            } else if (RetainedWebViewManager.isFirstPartyTrustedMediaOrigin(originUrl, latestActiveEndpoint)) {
+                proceedWithApprovedWebMediaRequest(request)
             } else {
-                val missingPerms = neededPerms.filter { perm ->
-                    ContextCompat.checkSelfPermission(context, perm) != PackageManager.PERMISSION_GRANTED
-                }
-                if (missingPerms.isEmpty()) {
+                // Untrusted/third-party origin: require explicit user confirmation before granting
+                pendingOriginMediaConfirmRequest?.let { stale ->
                     try {
-                        request.grant(allowedResources.toTypedArray())
+                        stale.deny()
                     } catch (_: Exception) {
                     }
-                } else {
-                    pendingWebPermissionRequest?.let { stale ->
-                        try {
-                            stale.deny()
-                        } catch (_: Exception) {
-                        }
-                    }
-                    pendingWebPermissionRequest = request
-                    runtimePermissionsLauncher.launch(missingPerms.toTypedArray())
                 }
+                pendingOriginMediaConfirmRequest = request
             }
         }
 
         RetainedWebViewManager.onWebPermissionRequestCanceled = { canceledRequest ->
             if (pendingWebPermissionRequest === canceledRequest) {
                 pendingWebPermissionRequest = null
+            }
+            if (pendingOriginMediaConfirmRequest === canceledRequest) {
+                pendingOriginMediaConfirmRequest = null
             }
         }
 
@@ -717,26 +867,32 @@ fun AntigravityPulseApp(
                 val safeFileName = sanitizeDownloadFileName(
                     URLUtil.guessFileName(url, contentDisposition, mimeType)
                 )
-                val isHttpsDownload = url.trim().startsWith("https://", ignoreCase = true)
+                val safeUserAgent = userAgent.replace(Regex("[\\r\\n]"), "").trim().take(512)
+                val safeMimeType = mimeType.replace(Regex("[\\r\\n;]"), "").trim().take(128)
+                val allowCookieAttach = RetainedWebViewManager.isTrustedCookieDownloadUrl(
+                    downloadUrl = url,
+                    activeRemoteEndpoint = latestActiveEndpoint
+                )
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     try {
                         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
                         val dmReq = DownloadManager.Request(Uri.parse(url)).apply {
-                            val resolvedMime = mimeType.takeIf { it.isNotBlank() }
-                            if (resolvedMime != null) setMimeType(resolvedMime)
-                            // Only attach session cookies over encrypted HTTPS downloads
-                            if (isHttpsDownload) {
+                            if (safeMimeType.isNotBlank()) setMimeType(safeMimeType)
+                            // Strictly scope session cookies to verified HTTPS first-party workspaces
+                            // or the user's own configured remote host to prevent cookie exfiltration.
+                            if (allowCookieAttach) {
                                 val cookies = try {
                                     CookieManager.getInstance().getCookie(url)
                                 } catch (_: Exception) {
                                     null
                                 }
-                                if (!cookies.isNullOrBlank()) {
-                                    addRequestHeader("Cookie", cookies)
+                                val safeCookies = cookies?.replace(Regex("[\\r\\n]"), "")?.trim()
+                                if (!safeCookies.isNullOrBlank()) {
+                                    addRequestHeader("Cookie", safeCookies)
                                 }
                             }
-                            if (userAgent.isNotBlank()) {
-                                addRequestHeader("User-Agent", userAgent)
+                            if (safeUserAgent.isNotBlank()) {
+                                addRequestHeader("User-Agent", safeUserAgent)
                             }
                             setTitle(safeFileName)
                             setDescription("Downloading via Antigravity Pulse")
@@ -752,14 +908,20 @@ fun AntigravityPulseApp(
                         antigravityViewModel.recordWebViewBridgeEvent("Downloading $safeFileName to Downloads...")
                     } catch (_: Exception) {
                         try {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                            )
                         } catch (_: Exception) {
                             antigravityViewModel.recordWebViewBridgeEvent("Unable to start download.")
                         }
                     }
                 } else {
                     try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                .addCategory(Intent.CATEGORY_BROWSABLE)
+                        )
                     } catch (_: Exception) {
                         antigravityViewModel.recordWebViewBridgeEvent("No browser available to download file.")
                     }
@@ -775,6 +937,13 @@ fun AntigravityPulseApp(
                 }
             }
             pendingWebPermissionRequest = null
+            pendingOriginMediaConfirmRequest?.let { stale ->
+                try {
+                    stale.deny()
+                } catch (_: Exception) {
+                }
+            }
+            pendingOriginMediaConfirmRequest = null
             RetainedWebViewManager.onWebPermissionRequestHandler = null
             RetainedWebViewManager.onWebPermissionRequestCanceled = null
             RetainedWebViewManager.onWebDownloadRequested = null
@@ -863,6 +1032,7 @@ fun AntigravityPulseApp(
             RetainedWebViewManager.onNetworkLost()
             AiStudioPinnedWebViewManager.onNetworkLost()
             DevWebWorkspaceRegistry.onNetworkLostAll()
+            PulseBrowserManager.onNetworkLostAll()
         }
 
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -873,6 +1043,7 @@ fun AntigravityPulseApp(
                     RetainedWebViewManager.onNetworkLost()
                     AiStudioPinnedWebViewManager.onNetworkLost()
                     DevWebWorkspaceRegistry.onNetworkLostAll()
+                    PulseBrowserManager.onNetworkLostAll()
                 }
             }
 
@@ -895,6 +1066,9 @@ fun AntigravityPulseApp(
                             autoReloadAfterLongOutage = shouldAutoReload
                         )
                         DevWebWorkspaceRegistry.onNetworkRestoredAll(
+                            autoReloadAfterLongOutage = shouldAutoReload
+                        )
+                        PulseBrowserManager.onNetworkRestoredAll(
                             autoReloadAfterLongOutage = shouldAutoReload
                         )
                         antigravityViewModel.recordWebViewBridgeEvent(
@@ -920,6 +1094,57 @@ fun AntigravityPulseApp(
         }
     }
 
+    // Centralized multi-user isolation wipe: purges local Room hosts, saved URL, all WebView
+    // RAM/DOM sessions, cookies, WebStorage, HTTP auth credentials, and lingering notifications.
+    fun performFullLocalSessionWipe(clearSavedUid: Boolean) {
+        onUpdateAppearance {
+            it.copy(
+                lastActiveRemoteUrl = "",
+                lastSignedInUid = if (clearSavedUid) "" else it.lastSignedInUid
+            )
+        }
+        RetainedWebViewManager.clearSensitiveBrowsingData(context)
+        AiStudioPinnedWebViewManager.clearSensitiveBrowsingData(context)
+        DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData(context)
+        PulseBrowserManager.clearAllSensitiveBrowsingData(context)
+        antigravityViewModel.clearAllLocalWorkspaceData()
+        try {
+            NotificationManagerCompat.from(context.applicationContext).cancelAll()
+        } catch (_: Exception) {
+        }
+    }
+
+    // Global cross-user isolation guard: detects live sign-outs/revocations AND cold-start
+    // account switches (User A -> User B) via persisted lastSignedInUid, wiping all local data
+    // before the new user can access any previous session state.
+    val currentAuthUser by Firebase.auth.authStateFlow()
+        .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
+    var lastObservedAuthUid by remember { mutableStateOf(Firebase.auth.currentUser?.uid) }
+
+    LaunchedEffect(currentAuthUser?.uid) {
+        val newUid = currentAuthUser?.uid
+        val previousMemoryUid = lastObservedAuthUid
+        val persistedUid = appearance.lastSignedInUid
+
+        when {
+            newUid != null && persistedUid.isNotBlank() && persistedUid != newUid -> {
+                // Account switch detected (same session or after cold restart)
+                performFullLocalSessionWipe(clearSavedUid = false)
+                onUpdateAppearance { it.copy(lastSignedInUid = newUid) }
+            }
+            newUid != null && persistedUid.isBlank() -> {
+                // First sign-in on a clean device: bind local workspace to this UID
+                onUpdateAppearance { it.copy(lastSignedInUid = newUid) }
+            }
+            previousMemoryUid != null && newUid == null -> {
+                // Live sign-out or revoked auth session: purge local workspace & Firestore cache
+                performFullLocalSessionWipe(clearSavedUid = true)
+                clearFirestoreLocalCache(context)
+            }
+        }
+        lastObservedAuthUid = newUid
+    }
+
     // Sync active endpoint URL to synchronous SharedPreferences for instant restore after unlock/restart
     LaunchedEffect(telemetry.activeEndpoint) {
         val clean = telemetry.activeEndpoint.trim()
@@ -939,13 +1164,15 @@ fun AntigravityPulseApp(
 
     val isBarsHidden = appearance.isFullscreenBarsHidden
 
-    // Smart Back navigation: close floating panel -> pop active workspace WebView history -> return to Remote -> pop Remote
+    // Smart Back navigation: close floating panel -> pop active workspace/browser WebView history -> return to Remote -> pop Remote
     val currentPulseTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
     val isAiStudioWebBackActive = currentPulseTab == PulseTab.AI_STUDIO && aiStudioCanGoBack
+    val isBrowserBackActive = currentPulseTab == PulseTab.BROWSER && activeBrowserTab.canGoBack
     val activeDevBackSession = when (currentPulseTab) {
         PulseTab.GITHUB -> if (githubCanGoBack) githubSession else null
         PulseTab.VERCEL -> if (vercelCanGoBack) vercelSession else null
         PulseTab.SUPABASE -> if (supabaseCanGoBack) supabaseSession else null
+        PulseTab.GEMINI -> if (geminiCanGoBack) geminiSession else null
         else -> null
     }
     BackHandler(
@@ -954,11 +1181,13 @@ fun AntigravityPulseApp(
                 selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal ||
                 remoteCanGoBack ||
                 isAiStudioWebBackActive ||
+                isBrowserBackActive ||
                 activeDevBackSession != null)
     ) {
         when {
             showFloatingQuickMenu -> showFloatingQuickMenu = false
             isAiStudioWebBackActive -> AiStudioPinnedWebViewManager.goBack()
+            isBrowserBackActive -> PulseBrowserManager.goBackActiveTab()
             activeDevBackSession != null -> activeDevBackSession.goBack()
             selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal -> selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
             else -> RetainedWebViewManager.goBack()
@@ -1187,33 +1416,39 @@ fun AntigravityPulseApp(
                         containerColor = surface,
                         modifier = Modifier.testTag("adaptive_navigation_rail")
                     ) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        PulseTab.entries.forEachIndexed { index, tab ->
-                            NavigationRailItem(
-                                selected = selectedTabIndex == index,
-                                onClick = { selectedTabIndex = index },
-                                icon = {
-                                    Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = stringResource(id = tab.titleRes)
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        text = stringResource(id = tab.titleRes),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1
-                                    )
-                                },
-                                colors = NavigationRailItemDefaults.colors(
-                                    selectedIconColor = accent,
-                                    selectedTextColor = accent,
-                                    indicatorColor = accent.copy(alpha = 0.16f),
-                                    unselectedIconColor = secondaryFg,
-                                    unselectedTextColor = secondaryFg
-                                ),
-                                modifier = Modifier.testTag("${tab.tag}_rail")
-                            )
+                        Column(
+                            modifier = Modifier.verticalScroll(rememberScrollState()),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            PulseTab.entries.forEachIndexed { index, tab ->
+                                NavigationRailItem(
+                                    selected = selectedTabIndex == index,
+                                    onClick = { selectedTabIndex = index },
+                                    icon = {
+                                        Icon(
+                                            imageVector = tab.icon,
+                                            contentDescription = stringResource(id = tab.titleRes)
+                                        )
+                                    },
+                                    label = {
+                                        Text(
+                                            text = stringResource(id = tab.shortTitleRes),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1
+                                        )
+                                    },
+                                    colors = NavigationRailItemDefaults.colors(
+                                        selectedIconColor = accent,
+                                        selectedTextColor = accent,
+                                        indicatorColor = accent.copy(alpha = 0.16f),
+                                        unselectedIconColor = secondaryFg,
+                                        unselectedTextColor = secondaryFg
+                                    ),
+                                    modifier = Modifier.testTag("${tab.tag}_rail")
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                     VerticalDivider(color = border, thickness = 1.dp)
@@ -1227,19 +1462,20 @@ fun AntigravityPulseApp(
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
                         if (statusBanner != null) {
+                            val bannerGreen = activeTheme.successColor
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 12.dp, vertical = 4.dp)
                                     .frostedGlass(
                                         shape = RoundedCornerShape(14.dp),
-                                        baseColor = EmeraldOnline.copy(alpha = 0.18f),
-                                        tintColor = EmeraldOnline,
-                                        borderColor = EmeraldOnline,
+                                        baseColor = if (activeTheme.isLightMode) surface else bannerGreen.copy(alpha = 0.18f),
+                                        tintColor = bannerGreen,
+                                        borderColor = bannerGreen,
                                         enabled = activeTheme.isFrostedGlassEnabled,
-                                        fillAlpha = 0.26f,
+                                        fillAlpha = if (activeTheme.isLightMode) 0.94f else 0.26f,
                                         tintAlpha = 0.10f,
-                                        borderAlpha = 0.45f
+                                        borderAlpha = if (activeTheme.isLightMode) 0.65f else 0.45f
                                     )
                                     .clickable { antigravityViewModel.clearBanner() }
                                     .padding(horizontal = 12.dp, vertical = 7.dp)
@@ -1250,7 +1486,7 @@ fun AntigravityPulseApp(
                                 Text(
                                     text = statusBanner.orEmpty(),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = EmeraldOnline,
+                                    color = bannerGreen,
                                     modifier = Modifier.weight(1f)
                                 )
                                 Text(
@@ -1302,20 +1538,30 @@ fun AntigravityPulseApp(
                                     }
                                 )
 
+                                PulseTab.GEMINI,
                                 PulseTab.GITHUB,
                                 PulseTab.VERCEL,
                                 PulseTab.SUPABASE -> {
                                     val workspace = PulseTab.entries[safeIndex].devWorkspace!!
-                                    PinnedWebWorkspaceScreen(
-                                        workspace = workspace,
-                                        domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
-                                        isFullscreenBarsHidden = isBarsHidden,
-                                        onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
-                                        onStatusEvent = { eventMsg ->
-                                            antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
-                                        }
-                                    )
+                                    key(workspace) {
+                                        PinnedWebWorkspaceScreen(
+                                            workspace = workspace,
+                                            domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                            isFullscreenBarsHidden = isBarsHidden,
+                                            onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                            onStatusEvent = { eventMsg ->
+                                                antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                            }
+                                        )
+                                    }
                                 }
+
+                                PulseTab.BROWSER -> PulseBrowserScreen(
+                                    domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                    onStatusEvent = { eventMsg ->
+                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
+                                    }
+                                )
 
                                 PulseTab.STORAGE_SYNC -> StorageAndCloudSyncScreen(
                                     dao = dao,
@@ -1329,11 +1575,10 @@ fun AntigravityPulseApp(
                                     },
                                     onOpenAddHostModal = { showServerModal = true },
                                     onClearLocalData = {
-                                        onUpdateAppearance { it.copy(lastActiveRemoteUrl = "") }
-                                        RetainedWebViewManager.clearSensitiveBrowsingData()
-                                        AiStudioPinnedWebViewManager.clearSensitiveBrowsingData()
-                                        DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData()
-                                        antigravityViewModel.clearAllLocalWorkspaceData()
+                                        performFullLocalSessionWipe(clearSavedUid = false)
+                                    },
+                                    onBeforeSignOut = {
+                                        performFullLocalSessionWipe(clearSavedUid = true)
                                     }
                                 )
                             }
@@ -1344,19 +1589,23 @@ fun AntigravityPulseApp(
                     if (isBarsHidden) {
                         val activeTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
                         val isOnAiStudio = activeTab == PulseTab.AI_STUDIO
+                        val isOnBrowser = activeTab == PulseTab.BROWSER
                         val activeDevWorkspace = activeTab.devWorkspace
                         val activeDevSession = activeDevWorkspace?.let { DevWebWorkspaceRegistry.session(it) }
                         val activeDevShortcutId = when (activeDevWorkspace) {
                             DevWebWorkspace.GITHUB -> githubActiveShortcut
                             DevWebWorkspace.VERCEL -> vercelActiveShortcut
                             DevWebWorkspace.SUPABASE -> supabaseActiveShortcut
+                            DevWebWorkspace.GEMINI -> geminiActiveShortcut
                             null -> ""
                         }
-                        val activeDevDesktopMode = when (activeDevWorkspace) {
-                            DevWebWorkspace.GITHUB -> githubDesktopMode
-                            DevWebWorkspace.VERCEL -> vercelDesktopMode
-                            DevWebWorkspace.SUPABASE -> supabaseDesktopMode
-                            null -> false
+                        val activeDesktopMode = when {
+                            isOnBrowser -> activeBrowserTab.isDesktopMode
+                            activeDevWorkspace == DevWebWorkspace.GITHUB -> githubDesktopMode
+                            activeDevWorkspace == DevWebWorkspace.VERCEL -> vercelDesktopMode
+                            activeDevWorkspace == DevWebWorkspace.SUPABASE -> supabaseDesktopMode
+                            activeDevWorkspace == DevWebWorkspace.GEMINI -> geminiDesktopMode
+                            else -> false
                         }
 
                         MovableFloatingControlPanel(
@@ -1370,7 +1619,10 @@ fun AntigravityPulseApp(
                             activeAiStudioSection = activeAiStudioSection,
                             activeDevWorkspace = activeDevWorkspace,
                             activeDevShortcutId = activeDevShortcutId,
-                            isDesktopModeEnabled = activeDevDesktopMode,
+                            isBrowserActive = isOnBrowser,
+                            isBrowserBarVisible = isBrowserBarVisible,
+                            browserTabCount = browserTabs.size,
+                            isDesktopModeEnabled = activeDesktopMode,
                             domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
                             surface = surface,
                             elevated = elevated,
@@ -1395,12 +1647,20 @@ fun AntigravityPulseApp(
                                 activeDevSession?.navigateToShortcut(shortcut)
                             },
                             onToggleDesktopMode = { enabled ->
-                                activeDevSession?.setDesktopMode(enabled)
-                                activeDevWorkspace?.let { ws ->
+                                if (isOnBrowser) {
+                                    PulseBrowserManager.setActiveTabDesktopMode(enabled)
                                     antigravityViewModel.recordWebViewBridgeEvent(
-                                        if (enabled) "${ws.displayName}: Desktop View enabled"
-                                        else "${ws.displayName}: Mobile View enabled"
+                                        if (enabled) "Browser: Desktop View enabled"
+                                        else "Browser: Mobile View enabled"
                                     )
+                                } else {
+                                    activeDevSession?.setDesktopMode(enabled)
+                                    activeDevWorkspace?.let { ws ->
+                                        antigravityViewModel.recordWebViewBridgeEvent(
+                                            if (enabled) "${ws.displayName}: Desktop View enabled"
+                                            else "${ws.displayName}: Mobile View enabled"
+                                        )
+                                    }
                                 }
                             },
                             onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
@@ -1408,7 +1668,10 @@ fun AntigravityPulseApp(
                                 try {
                                     val url = AiStudioPinnedWebViewManager.currentUrl()
                                     if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                .addCategory(Intent.CATEGORY_BROWSABLE)
+                                        )
                                     } else {
                                         antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
                                     }
@@ -1420,9 +1683,32 @@ fun AntigravityPulseApp(
                                 try {
                                     val url = activeDevSession?.currentUrl().orEmpty()
                                     if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                .addCategory(Intent.CATEGORY_BROWSABLE)
+                                        )
                                     } else {
                                         antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
+                                    }
+                                } catch (_: Exception) {
+                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
+                                }
+                            },
+                            onNewBrowserTab = {
+                                PulseBrowserManager.openNewTab()
+                                PulseBrowserManager.setAddressBarVisible(true)
+                            },
+                            onToggleBrowserBar = { PulseBrowserManager.toggleAddressBar() },
+                            onOpenBrowserExternal = {
+                                try {
+                                    val url = activeBrowserTab.url
+                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                .addCategory(Intent.CATEGORY_BROWSABLE)
+                                        )
+                                    } else {
+                                        antigravityViewModel.recordWebViewBridgeEvent("Open a webpage first.")
                                     }
                                 } catch (_: Exception) {
                                     antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
@@ -1432,6 +1718,7 @@ fun AntigravityPulseApp(
                             onOpenQrScanner = { showGlobalQrScanner = true },
                             reloadActionLabel = when {
                                 isOnAiStudio -> "Reload AI Studio"
+                                isOnBrowser -> "Reload Page"
                                 activeDevWorkspace != null -> "Reload ${activeDevWorkspace.displayName}"
                                 else -> "Reload Remote"
                             },
@@ -1440,6 +1727,11 @@ fun AntigravityPulseApp(
                                     isOnAiStudio -> {
                                         AiStudioPinnedWebViewManager.reloadCurrentPage()
                                         antigravityViewModel.recordWebViewBridgeEvent("Reloading AI Studio...")
+                                    }
+
+                                    isOnBrowser -> {
+                                        PulseBrowserManager.reloadActiveTab()
+                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading browser tab...")
                                     }
 
                                     activeDevSession != null && activeDevWorkspace != null -> {
@@ -1556,7 +1848,7 @@ fun AntigravityPulseApp(
                             Text(
                                 text = if (profile.lastLatencyMs > 0) "${profile.lastLatencyMs}ms" else "Saved",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = EmeraldOnline
+                                color = activeTheme.successColor
                             )
                         }
                     }
@@ -1616,7 +1908,7 @@ fun AntigravityPulseApp(
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = accent,
-                        contentColor = Color(0xFF000000)
+                        contentColor = activeTheme.onAccentColor
                     )
                 ) {
                     Text("Save & Connect", fontWeight = FontWeight.Bold)
@@ -1730,7 +2022,8 @@ private fun AntigravityRemoteTopBar(
 
             Spacer(modifier = Modifier.width(10.dp))
 
-            val isFrosted = LocalAppearanceSettings.current.isFrostedGlassEnabled
+            val barTheme = LocalAppearanceSettings.current
+            val isFrosted = barTheme.isFrostedGlassEnabled
             Box {
                 Row(
                     modifier = Modifier
@@ -1753,7 +2046,7 @@ private fun AntigravityRemoteTopBar(
                         modifier = Modifier
                             .size(9.dp)
                             .clip(CircleShape)
-                            .background(if (activeProfile != null) EmeraldOnline else accent)
+                            .background(if (activeProfile != null) barTheme.successColor else accent)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(

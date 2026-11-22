@@ -125,25 +125,18 @@ fun handleFirestoreError(exception: Throwable, operationType: OperationType, pat
     val auth = FirebaseAuth.getInstance()
     val currentUser = auth.currentUser
 
-    val providerInfoList = currentUser?.providerData?.map { provider ->
-        JSONObject().apply {
-            put("providerId", provider.providerId)
-            put("email", provider.email)
-        }
-    } ?: emptyList()
+    val providerIds = currentUser?.providerData?.map { it.providerId } ?: emptyList()
 
     val authInfoJson = JSONObject().apply {
-        put("userId", currentUser?.uid)
-        put("email", currentUser?.email)
-        put("emailVerified", currentUser?.isEmailVerified)
-        put("tenantId", currentUser?.tenantId)
-        put("providerInfo", JSONArray(providerInfoList))
+        put("isSignedIn", currentUser != null)
+        put("emailVerified", currentUser?.isEmailVerified == true)
+        put("providerIds", JSONArray(providerIds))
     }
 
     val errorInfoJson = JSONObject().apply {
-        put("error", rootError.message ?: rootError.toString())
+        put("error", rootError.message ?: rootError.javaClass.simpleName)
         put("operationType", operationType.value)
-        put("path", path)
+        put("path", path?.replace(Regex("users/[^/]+"), "users/<uid>"))
         put("authInfo", authInfoJson)
     }
 
@@ -278,28 +271,60 @@ fun onGoogleSignInClicked(
                 onAuthError("Unexpected credential type returned")
             }
         } catch (e: GetCredentialCancellationException) {
-            Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+            if (BuildConfig.DEBUG) {
+                Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+            }
             onAuthCancelled()
         } catch (e: Exception) {
-            Log.e("Auth", "Google Sign-In failed", e)
+            if (BuildConfig.DEBUG) {
+                Log.e("Auth", "Google Sign-In failed", e)
+            }
             onAuthError(e.localizedMessage ?: "Google Sign-In failed")
         }
     }
 }
 
+/**
+ * Terminates the active Firestore client and wipes its on-disk offline cache so previously
+ * signed-in user documents cannot linger on shared devices after sign-out or account switch.
+ */
+suspend fun clearFirestoreLocalCache(context: Context) {
+    withContext(NonCancellable) {
+        try {
+            val databaseId = context.applicationContext.getString(R.string.firestore_database_id)
+            val db = FirebaseFirestore.getInstance(databaseId)
+            db.terminate().await()
+            db.clearPersistence().await()
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) {
+                Log.w("Auth", "Firestore offline cache cleanup skipped: ${e.message}")
+            }
+        }
+    }
+}
+
 fun signOutFromGoogle(
+    context: Context,
     credentialManager: CredentialManager,
     scope: CoroutineScope,
+    onBeforeSignOut: () -> Unit = {},
     onSignOutComplete: () -> Unit = {}
 ) {
     scope.launch {
         withContext(NonCancellable) {
             try {
+                onBeforeSignOut()
+            } catch (_: Exception) {
+            }
+            try {
                 credentialManager.clearCredentialState(ClearCredentialStateRequest())
             } catch (e: Exception) {
-                Log.w("Auth", "Failed to clear credential state: ${e.message}")
+                if (BuildConfig.DEBUG) {
+                    Log.w("Auth", "Failed to clear credential state: ${e.message}")
+                }
             } finally {
                 Firebase.auth.signOut()
+                clearFirestoreLocalCache(context)
                 onSignOutComplete()
             }
         }
@@ -328,10 +353,13 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
     }
 
     fun observeCloudServerProfiles(userId: String): Flow<List<CloudServerProfile>> = flow {
-        require(userId.isNotBlank()) { "Authenticated userId required" }
+        require(userId.isNotBlank() && auth.currentUser?.uid == userId) {
+            "Authenticated owner userId required"
+        }
         val path = "users/$userId/serverProfiles"
         emitAll(
             db.collection("users").document(userId).collection("serverProfiles")
+                .limit(100)
                 .snapshots()
                 .map { snapshot ->
                     snapshot.toObjects(
@@ -354,10 +382,13 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
     }
 
     fun observeCloudCopilotPrompts(userId: String): Flow<List<CloudCopilotPrompt>> = flow {
-        require(userId.isNotBlank()) { "Authenticated userId required" }
+        require(userId.isNotBlank() && auth.currentUser?.uid == userId) {
+            "Authenticated owner userId required"
+        }
         val path = "users/$userId/copilotPrompts"
         emitAll(
             db.collection("users").document(userId).collection("copilotPrompts")
+                .limit(100)
                 .snapshots()
                 .map { snapshot ->
                     snapshot.toObjects(
@@ -395,9 +426,9 @@ class CloudSyncRepository(private val db: FirebaseFirestore) {
                 .stripSensitiveUrlCredentials(endpointUrl)
                 .take(300)
             require(
-                cleanUrl.startsWith("https://", ignoreCase = true) ||
-                    cleanUrl.startsWith("http://", ignoreCase = true)
-            ) { "Only http:// or https:// host URLs can be backed up to Cloud Sync." }
+                com.example.data.remote.RetainedWebViewManager.isSafeHttpUrl(cleanUrl) &&
+                    Regex("^https?://[a-zA-Z0-9._:\\[\\]-]+(:[0-9]{1,5})?(/[a-zA-Z0-9._~/%+-]*)?$").matches(cleanUrl)
+            ) { "Only safe http:// or https:// host URLs can be backed up to Cloud Sync." }
 
             val validMode = if (connectionMode in listOf("HYBRID_BRIDGE", "DIRECT_TUNNEL", "PAIRING_TOKEN")) {
                 connectionMode

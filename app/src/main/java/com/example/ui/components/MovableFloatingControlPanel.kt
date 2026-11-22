@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -25,6 +27,8 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
@@ -32,12 +36,16 @@ import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WebAsset
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -83,13 +91,12 @@ data class FloatingPanelTabItem(
 )
 
 /**
- * Compact, translucent, movable floating handle & expanded control panel.
+ * Compact, translucent, movable floating handle & dropdown-driven control sidebar.
  *
- * - Docked to left/right edge: sleek sidebar-tab shape.
- * - Moved anywhere else on screen: compact rounded floating pill.
- * - Position persists as normalized fractions [0f..1f] across restarts.
- * - Context-aware: when on the AI Studio tab, puts Prompts, Build Apps, Library,
- *   Lag Booster, Reload, and Open in Browser one tap away without cluttering fullscreen.
+ * - Keeps the panel short and uncluttered using two collapsible dropdowns:
+ *   1. `Workspaces ▾` (compact 2-column grid of all connected workspaces)
+ *   2. `Page Tools ▾` (context-aware shortcuts, Desktop View, Lag Booster, Browser bar/tabs)
+ * - Keeps `Reload`, `Settings`, and `Show Bars` permanently 1-tap in the footer.
  */
 @Composable
 fun MovableFloatingControlPanel(
@@ -103,6 +110,9 @@ fun MovableFloatingControlPanel(
     activeAiStudioSection: AiStudioWebSection = AiStudioWebSection.NEW_CHAT,
     activeDevWorkspace: DevWebWorkspace? = null,
     activeDevShortcutId: String = "",
+    isBrowserActive: Boolean = false,
+    isBrowserBarVisible: Boolean = true,
+    browserTabCount: Int = 1,
     isDesktopModeEnabled: Boolean = false,
     domLagBoosterEnabled: Boolean = true,
     surface: Color,
@@ -120,6 +130,9 @@ fun MovableFloatingControlPanel(
     onToggleDomBooster: (Boolean) -> Unit = {},
     onOpenAiStudioExternal: () -> Unit = {},
     onOpenDevWorkspaceExternal: () -> Unit = {},
+    onNewBrowserTab: () -> Unit = {},
+    onToggleBrowserBar: () -> Unit = {},
+    onOpenBrowserExternal: () -> Unit = {},
     onOpenHostSwitcher: () -> Unit,
     onOpenQrScanner: () -> Unit,
     onReloadWeb: () -> Unit,
@@ -128,12 +141,26 @@ fun MovableFloatingControlPanel(
     reloadActionLabel: String = "Reload Remote",
     modifier: Modifier = Modifier
 ) {
+    var workspacesDropdownOpen by remember { mutableStateOf(false) }
+    var pageToolsDropdownOpen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isExpanded) {
+        if (!isExpanded) {
+            workspacesDropdownOpen = false
+            pageToolsDropdownOpen = false
+        }
+    }
+
     BoxWithConstraints(
         modifier = modifier.fillMaxSize()
     ) {
         val density = LocalDensity.current
         val haptic = LocalHapticFeedback.current
-        val isFrostedGlass = LocalAppearanceSettings.current.isFrostedGlassEnabled
+        val currentAppearance = LocalAppearanceSettings.current
+        val isFrostedGlass = currentAppearance.isFrostedGlassEnabled
+        val isLightMode = currentAppearance.isLightMode
+        val onAccent = currentAppearance.onAccentColor
+        val successColor = currentAppearance.successColor
         val containerWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
         val containerHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
         val edgeMarginPx = with(density) { 8.dp.toPx() }
@@ -147,8 +174,8 @@ fun MovableFloatingControlPanel(
         var panelSize by remember {
             mutableStateOf(
                 IntSize(
-                    with(density) { 196.dp.toPx() }.roundToInt(),
-                    with(density) { 380.dp.toPx() }.roundToInt()
+                    with(density) { 218.dp.toPx() }.roundToInt(),
+                    with(density) { 250.dp.toPx() }.roundToInt()
                 )
             )
         }
@@ -187,16 +214,16 @@ fun MovableFloatingControlPanel(
                         )
                     }
                     .onSizeChanged { handleSize = it }
-                    .shadow(3.dp, handleShape, ambientColor = Color.Black.copy(alpha = 0.28f))
+                    .shadow(if (isLightMode) 5.dp else 3.dp, handleShape, ambientColor = Color.Black.copy(alpha = 0.28f))
                     .frostedGlass(
                         shape = handleShape,
-                        baseColor = elevated,
+                        baseColor = if (isLightMode) surface else elevated,
                         tintColor = accent,
-                        borderColor = accent,
+                        borderColor = if (isLightMode) border else accent,
                         enabled = isFrostedGlass,
-                        fillAlpha = 0.46f,
+                        fillAlpha = if (isLightMode) 0.94f else 0.56f,
                         tintAlpha = 0.10f,
-                        borderAlpha = 0.55f
+                        borderAlpha = if (isLightMode) 0.78f else 0.55f
                     )
                     .pointerInput(maxHandleX, maxHandleY) {
                         detectDragGestures(
@@ -224,7 +251,7 @@ fun MovableFloatingControlPanel(
                 Icon(
                     imageVector = Icons.Default.DragIndicator,
                     contentDescription = "Drag to move control handle",
-                    tint = secondaryFg.copy(alpha = 0.72f),
+                    tint = secondaryFg.copy(alpha = if (isLightMode) 0.88f else 0.72f),
                     modifier = Modifier.size(13.dp)
                 )
                 Icon(
@@ -234,12 +261,19 @@ fun MovableFloatingControlPanel(
                         Icons.AutoMirrored.Filled.KeyboardArrowRight
                     },
                     contentDescription = "Open Movable Side Panel Controls",
-                    tint = accent.copy(alpha = 0.85f),
+                    tint = accent,
                     modifier = Modifier.size(16.dp)
                 )
             }
         } else {
-            // Subtle tap-outside backdrop scrim to collapse the movable panel
+            val activeTabLabel = tabs.firstOrNull { it.index == selectedTabIndex }?.title ?: "Remote"
+            val headerTitle = when {
+                isAiStudioActive -> "AI Studio"
+                activeDevWorkspace != null -> activeDevWorkspace.displayName
+                isBrowserActive -> "Browser ($browserTabCount)"
+                else -> activeTabLabel
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -255,11 +289,10 @@ fun MovableFloatingControlPanel(
 
             val maxPanelX = (containerWidthPx - panelSize.width - edgeMarginPx).coerceAtLeast(edgeMarginPx)
             val maxPanelY = (containerHeightPx - panelSize.height - edgeMarginPx).coerceAtLeast(edgeMarginPx)
-
             val clampedPanelX = handleX.coerceIn(edgeMarginPx, maxPanelX)
             val clampedPanelY = handleY.coerceIn(edgeMarginPx, maxPanelY)
 
-            val panelShape = RoundedCornerShape(22.dp)
+            val panelShape = RoundedCornerShape(20.dp)
             Column(
                 modifier = Modifier
                     .offset {
@@ -269,8 +302,8 @@ fun MovableFloatingControlPanel(
                         )
                     }
                     .onSizeChanged { panelSize = it }
-                    .width(200.dp)
-                    .heightIn(max = (maxHeight - 24.dp).coerceAtLeast(220.dp))
+                    .width(224.dp)
+                    .heightIn(max = (maxHeight - 24.dp).coerceAtLeast(200.dp))
                     .shadow(14.dp, panelShape, ambientColor = Color.Black.copy(alpha = 0.45f))
                     .frostedGlass(
                         shape = panelShape,
@@ -278,13 +311,13 @@ fun MovableFloatingControlPanel(
                         tintColor = accent,
                         borderColor = border,
                         enabled = isFrostedGlass,
-                        fillAlpha = 0.84f,
-                        tintAlpha = 0.08f,
-                        borderAlpha = 0.65f
+                        fillAlpha = 0.88f,
+                        tintAlpha = 0.07f,
+                        borderAlpha = 0.62f
                     )
                     .testTag("floating_quick_menu_overlay")
             ) {
-                // Compact Draggable Header Bar
+                // Compact Draggable Header
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -315,17 +348,14 @@ fun MovableFloatingControlPanel(
                             tint = accent,
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = when {
-                                isAiStudioActive -> "AI Studio"
-                                activeDevWorkspace != null -> activeDevWorkspace.displayName
-                                else -> "Controls"
-                            },
+                            text = headerTitle,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = fg,
-                            maxLines = 1
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
@@ -344,275 +374,398 @@ fun MovableFloatingControlPanel(
                     }
                 }
 
-                HorizontalDivider(color = border.copy(alpha = 0.6f))
+                HorizontalDivider(color = border.copy(alpha = 0.55f))
 
-                // Compact Context-Aware Control Actions
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                         .padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (isAiStudioActive) {
-                        // Distraction-free fullscreen AI Studio quick jumps
-                        PanelActionButton(
-                            label = "Prompts",
-                            icon = Icons.AutoMirrored.Filled.Chat,
-                            iconTint = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) accent else secondaryFg,
-                            textColor = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) accent else fg,
-                            containerColor = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) {
-                                accent.copy(alpha = 0.16f)
-                            } else {
-                                elevated.copy(alpha = 0.72f)
-                            },
-                            testTag = "floating_ai_studio_prompts",
-                            onClick = {
-                                onSelectAiStudioSection(AiStudioWebSection.NEW_CHAT)
-                                onExpandedChange(false)
-                            }
-                        )
+                    // DROPDOWN 1: Workspaces (collapsed by default -> compact 2-col grid when opened)
+                    PanelDropdownHeader(
+                        label = "Workspaces",
+                        badge = activeTabLabel,
+                        icon = Icons.Default.Apps,
+                        expanded = workspacesDropdownOpen,
+                        accent = accent,
+                        fg = fg,
+                        secondaryFg = secondaryFg,
+                        elevated = elevated,
+                        border = border,
+                        testTag = "floating_workspaces_dropdown_toggle",
+                        onClick = { workspacesDropdownOpen = !workspacesDropdownOpen }
+                    )
 
-                        PanelActionButton(
-                            label = "Build Apps",
-                            icon = Icons.Default.Code,
-                            iconTint = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) accent else secondaryFg,
-                            textColor = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) accent else fg,
-                            containerColor = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) {
-                                accent.copy(alpha = 0.16f)
-                            } else {
-                                elevated.copy(alpha = 0.72f)
-                            },
-                            testTag = "floating_ai_studio_build_apps",
-                            onClick = {
-                                onSelectAiStudioSection(AiStudioWebSection.BUILD_APPS)
-                                onExpandedChange(false)
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = "Library",
-                            icon = Icons.Default.FolderOpen,
-                            iconTint = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) accent else secondaryFg,
-                            textColor = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) accent else fg,
-                            containerColor = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) {
-                                accent.copy(alpha = 0.16f)
-                            } else {
-                                elevated.copy(alpha = 0.72f)
-                            },
-                            testTag = "floating_ai_studio_library",
-                            onClick = {
-                                onSelectAiStudioSection(AiStudioWebSection.DRIVE_LIBRARY)
-                                onExpandedChange(false)
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
-                            icon = Icons.Default.Bolt,
-                            iconTint = if (domLagBoosterEnabled) EmeraldOnline else secondaryFg,
-                            textColor = if (domLagBoosterEnabled) EmeraldOnline else fg,
-                            containerColor = if (domLagBoosterEnabled) {
-                                EmeraldOnline.copy(alpha = 0.16f)
-                            } else {
-                                elevated.copy(alpha = 0.72f)
-                            },
-                            testTag = "floating_ai_studio_lag_booster",
-                            onClick = {
-                                onToggleDomBooster(!domLagBoosterEnabled)
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = reloadActionLabel,
-                            icon = Icons.Default.Refresh,
-                            iconTint = secondaryFg,
-                            textColor = fg,
-                            containerColor = elevated.copy(alpha = 0.72f),
-                            testTag = "floating_quick_reload_web",
-                            onClick = {
-                                onExpandedChange(false)
-                                onReloadWeb()
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = "Open in Browser",
-                            icon = Icons.AutoMirrored.Filled.OpenInNew,
-                            iconTint = accent,
-                            textColor = fg,
-                            containerColor = elevated.copy(alpha = 0.72f),
-                            testTag = "floating_ai_studio_open_browser",
-                            onClick = {
-                                onExpandedChange(false)
-                                onOpenAiStudioExternal()
-                            }
-                        )
-                    } else if (activeDevWorkspace != null) {
-                        // Distraction-free fullscreen GitHub / Vercel / Supabase shortcuts & Desktop View
-                        activeDevWorkspace.shortcuts.forEach { shortcut ->
-                            val selected = activeDevShortcutId == shortcut.id
-                            PanelActionButton(
-                                label = shortcut.label,
-                                icon = Icons.Default.SubdirectoryArrowRight,
-                                iconTint = if (selected) accent else secondaryFg,
-                                textColor = if (selected) accent else fg,
-                                containerColor = if (selected) {
-                                    accent.copy(alpha = 0.16f)
-                                } else {
-                                    elevated.copy(alpha = 0.72f)
-                                },
-                                testTag = "floating_${activeDevWorkspace.id}_shortcut_${shortcut.id}",
-                                onClick = {
-                                    onSelectDevShortcut(shortcut)
-                                    onExpandedChange(false)
+                    AnimatedVisibility(visible = workspacesDropdownOpen) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp)
+                                .testTag("floating_workspaces_dropdown_content"),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            tabs.chunked(2).forEach { pair ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    pair.forEach { tab ->
+                                        val isSelected = selectedTabIndex == tab.index
+                                        Row(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    if (isSelected) accent.copy(alpha = 0.16f)
+                                                    else elevated.copy(alpha = 0.65f)
+                                                )
+                                                .border(
+                                                    width = 1.dp,
+                                                    color = if (isSelected) accent.copy(alpha = 0.5f) else Color.Transparent,
+                                                    shape = RoundedCornerShape(10.dp)
+                                                )
+                                                .clickable {
+                                                    onSelectTab(tab.index)
+                                                    onExpandedChange(false)
+                                                }
+                                                .padding(horizontal = 7.dp, vertical = 7.dp)
+                                                .testTag("floating_tab_${tab.testTag}"),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = tab.icon,
+                                                contentDescription = tab.title,
+                                                tint = if (isSelected) accent else secondaryFg,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = tab.title,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                                color = if (isSelected) accent else fg,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    if (pair.size == 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
                                 }
+                            }
+                        }
+                    }
+
+                    // DROPDOWN 2: Page Tools (collapsed by default -> context-aware actions for active tab)
+                    PanelDropdownHeader(
+                        label = "Page Tools",
+                        badge = null,
+                        icon = Icons.Default.Tune,
+                        expanded = pageToolsDropdownOpen,
+                        accent = accent,
+                        fg = fg,
+                        secondaryFg = secondaryFg,
+                        elevated = elevated,
+                        border = border,
+                        testTag = "floating_page_tools_dropdown_toggle",
+                        onClick = { pageToolsDropdownOpen = !pageToolsDropdownOpen }
+                    )
+
+                    AnimatedVisibility(visible = pageToolsDropdownOpen) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp)
+                                .testTag("floating_page_tools_dropdown_content"),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            when {
+                                isAiStudioActive -> {
+                                    PanelActionButton(
+                                        label = "Prompts",
+                                        icon = Icons.AutoMirrored.Filled.Chat,
+                                        iconTint = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) accent else secondaryFg,
+                                        textColor = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) accent else fg,
+                                        containerColor = if (activeAiStudioSection == AiStudioWebSection.NEW_CHAT) {
+                                            accent.copy(alpha = 0.16f)
+                                        } else {
+                                            elevated.copy(alpha = 0.72f)
+                                        },
+                                        testTag = "floating_ai_studio_prompts",
+                                        onClick = {
+                                            onSelectAiStudioSection(AiStudioWebSection.NEW_CHAT)
+                                            onExpandedChange(false)
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = "Build Apps",
+                                        icon = Icons.Default.Code,
+                                        iconTint = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) accent else secondaryFg,
+                                        textColor = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) accent else fg,
+                                        containerColor = if (activeAiStudioSection == AiStudioWebSection.BUILD_APPS) {
+                                            accent.copy(alpha = 0.16f)
+                                        } else {
+                                            elevated.copy(alpha = 0.72f)
+                                        },
+                                        testTag = "floating_ai_studio_build_apps",
+                                        onClick = {
+                                            onSelectAiStudioSection(AiStudioWebSection.BUILD_APPS)
+                                            onExpandedChange(false)
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = "Library",
+                                        icon = Icons.Default.FolderOpen,
+                                        iconTint = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) accent else secondaryFg,
+                                        textColor = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) accent else fg,
+                                        containerColor = if (activeAiStudioSection == AiStudioWebSection.DRIVE_LIBRARY) {
+                                            accent.copy(alpha = 0.16f)
+                                        } else {
+                                            elevated.copy(alpha = 0.72f)
+                                        },
+                                        testTag = "floating_ai_studio_library",
+                                        onClick = {
+                                            onSelectAiStudioSection(AiStudioWebSection.DRIVE_LIBRARY)
+                                            onExpandedChange(false)
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
+                                        icon = Icons.Default.Bolt,
+                                        iconTint = if (domLagBoosterEnabled) successColor else secondaryFg,
+                                        textColor = if (domLagBoosterEnabled) successColor else fg,
+                                        containerColor = if (domLagBoosterEnabled) successColor.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_ai_studio_lag_booster",
+                                        onClick = { onToggleDomBooster(!domLagBoosterEnabled) }
+                                    )
+                                    PanelActionButton(
+                                        label = "Open in Browser",
+                                        icon = Icons.AutoMirrored.Filled.OpenInNew,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_ai_studio_open_browser",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenAiStudioExternal()
+                                        }
+                                    )
+                                }
+
+                                activeDevWorkspace != null -> {
+                                    activeDevWorkspace.shortcuts.forEach { shortcut ->
+                                        val selected = activeDevShortcutId == shortcut.id
+                                        PanelActionButton(
+                                            label = shortcut.label,
+                                            icon = Icons.Default.SubdirectoryArrowRight,
+                                            iconTint = if (selected) accent else secondaryFg,
+                                            textColor = if (selected) accent else fg,
+                                            containerColor = if (selected) accent.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                            testTag = "floating_${activeDevWorkspace.id}_shortcut_${shortcut.id}",
+                                            onClick = {
+                                                onSelectDevShortcut(shortcut)
+                                                onExpandedChange(false)
+                                            }
+                                        )
+                                    }
+                                    PanelActionButton(
+                                        label = if (isDesktopModeEnabled) "Desktop View: ON" else "Desktop View: OFF",
+                                        icon = if (isDesktopModeEnabled) Icons.Default.DesktopWindows else Icons.Default.Smartphone,
+                                        iconTint = if (isDesktopModeEnabled) accent else secondaryFg,
+                                        textColor = if (isDesktopModeEnabled) accent else fg,
+                                        containerColor = if (isDesktopModeEnabled) accent.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_dev_desktop_mode",
+                                        onClick = { onToggleDesktopMode(!isDesktopModeEnabled) }
+                                    )
+                                    PanelActionButton(
+                                        label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
+                                        icon = Icons.Default.Bolt,
+                                        iconTint = if (domLagBoosterEnabled) successColor else secondaryFg,
+                                        textColor = if (domLagBoosterEnabled) successColor else fg,
+                                        containerColor = if (domLagBoosterEnabled) successColor.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_dev_lag_booster",
+                                        onClick = { onToggleDomBooster(!domLagBoosterEnabled) }
+                                    )
+                                    PanelActionButton(
+                                        label = "Open in Browser",
+                                        icon = Icons.AutoMirrored.Filled.OpenInNew,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_dev_open_browser",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenDevWorkspaceExternal()
+                                        }
+                                    )
+                                }
+
+                                isBrowserActive -> {
+                                    PanelActionButton(
+                                        label = "New Browser Tab",
+                                        icon = Icons.Default.Add,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_browser_new_tab",
+                                        onClick = {
+                                            onNewBrowserTab()
+                                            onExpandedChange(false)
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = if (isBrowserBarVisible) "Hide Address Bar" else "Show Address Bar",
+                                        icon = Icons.Default.WebAsset,
+                                        iconTint = secondaryFg,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_browser_toggle_bar",
+                                        onClick = {
+                                            onToggleBrowserBar()
+                                            onExpandedChange(false)
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = if (isDesktopModeEnabled) "Desktop View: ON" else "Desktop View: OFF",
+                                        icon = if (isDesktopModeEnabled) Icons.Default.DesktopWindows else Icons.Default.Smartphone,
+                                        iconTint = if (isDesktopModeEnabled) accent else secondaryFg,
+                                        textColor = if (isDesktopModeEnabled) accent else fg,
+                                        containerColor = if (isDesktopModeEnabled) accent.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_browser_desktop_mode",
+                                        onClick = { onToggleDesktopMode(!isDesktopModeEnabled) }
+                                    )
+                                    PanelActionButton(
+                                        label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
+                                        icon = Icons.Default.Bolt,
+                                        iconTint = if (domLagBoosterEnabled) successColor else secondaryFg,
+                                        textColor = if (domLagBoosterEnabled) successColor else fg,
+                                        containerColor = if (domLagBoosterEnabled) successColor.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_browser_lag_booster",
+                                        onClick = { onToggleDomBooster(!domLagBoosterEnabled) }
+                                    )
+                                    PanelActionButton(
+                                        label = "Open in External",
+                                        icon = Icons.AutoMirrored.Filled.OpenInNew,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_browser_open_external",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenBrowserExternal()
+                                        }
+                                    )
+                                }
+
+                                else -> {
+                                    PanelActionButton(
+                                        label = activeHostLabel.ifBlank { "Connect Remote" },
+                                        icon = Icons.Default.Link,
+                                        iconTint = successColor,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_quick_connect_host",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenHostSwitcher()
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = "Scan QR Code",
+                                        icon = Icons.Default.QrCodeScanner,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_quick_scan_qr",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenQrScanner()
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        color = border.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+
+                    // Pinned Compact Footer Row: Reload + Settings (always 1-tap)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(elevated.copy(alpha = 0.75f))
+                                .clickable {
+                                    onExpandedChange(false)
+                                    onReloadWeb()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 8.dp)
+                                .testTag("floating_quick_reload_web"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = reloadActionLabel,
+                                tint = secondaryFg,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Reload",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = fg,
+                                maxLines = 1
                             )
                         }
 
-                        PanelActionButton(
-                            label = if (isDesktopModeEnabled) "Desktop View: ON" else "Desktop View: OFF",
-                            icon = if (isDesktopModeEnabled) Icons.Default.DesktopWindows else Icons.Default.Smartphone,
-                            iconTint = if (isDesktopModeEnabled) accent else secondaryFg,
-                            textColor = if (isDesktopModeEnabled) accent else fg,
-                            containerColor = if (isDesktopModeEnabled) {
-                                accent.copy(alpha = 0.16f)
-                            } else {
-                                elevated.copy(alpha = 0.72f)
-                            },
-                            testTag = "floating_dev_desktop_mode",
-                            onClick = {
-                                onToggleDesktopMode(!isDesktopModeEnabled)
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
-                            icon = Icons.Default.Bolt,
-                            iconTint = if (domLagBoosterEnabled) EmeraldOnline else secondaryFg,
-                            textColor = if (domLagBoosterEnabled) EmeraldOnline else fg,
-                            containerColor = if (domLagBoosterEnabled) {
-                                EmeraldOnline.copy(alpha = 0.16f)
-                            } else {
-                                elevated.copy(alpha = 0.72f)
-                            },
-                            testTag = "floating_dev_lag_booster",
-                            onClick = {
-                                onToggleDomBooster(!domLagBoosterEnabled)
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = reloadActionLabel,
-                            icon = Icons.Default.Refresh,
-                            iconTint = secondaryFg,
-                            textColor = fg,
-                            containerColor = elevated.copy(alpha = 0.72f),
-                            testTag = "floating_quick_reload_web",
-                            onClick = {
-                                onExpandedChange(false)
-                                onReloadWeb()
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = "Open in Browser",
-                            icon = Icons.AutoMirrored.Filled.OpenInNew,
-                            iconTint = accent,
-                            textColor = fg,
-                            containerColor = elevated.copy(alpha = 0.72f),
-                            testTag = "floating_dev_open_browser",
-                            onClick = {
-                                onExpandedChange(false)
-                                onOpenDevWorkspaceExternal()
-                            }
-                        )
-                    } else {
-                        PanelActionButton(
-                            label = activeHostLabel.ifBlank { "Connect Remote" },
-                            icon = Icons.Default.Link,
-                            iconTint = EmeraldOnline,
-                            textColor = fg,
-                            containerColor = elevated.copy(alpha = 0.72f),
-                            testTag = "floating_quick_connect_host",
-                            onClick = {
-                                onExpandedChange(false)
-                                onOpenHostSwitcher()
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = "Scan QR Code",
-                            icon = Icons.Default.QrCodeScanner,
-                            iconTint = accent,
-                            textColor = fg,
-                            containerColor = elevated.copy(alpha = 0.72f),
-                            testTag = "floating_quick_scan_qr",
-                            onClick = {
-                                onExpandedChange(false)
-                                onOpenQrScanner()
-                            }
-                        )
-
-                        PanelActionButton(
-                            label = reloadActionLabel,
-                            icon = Icons.Default.Refresh,
-                            iconTint = secondaryFg,
-                            textColor = fg,
-                            containerColor = elevated.copy(alpha = 0.72f),
-                            testTag = "floating_quick_reload_web",
-                            onClick = {
-                                onExpandedChange(false)
-                                onReloadWeb()
-                            }
-                        )
-                    }
-
-                    HorizontalDivider(
-                        color = border.copy(alpha = 0.55f),
-                        modifier = Modifier.padding(vertical = 2.dp)
-                    )
-
-                    // Main Tabs: Remote, AI Studio & Cloud Sync
-                    tabs.forEach { tab ->
-                        val isSelected = selectedTabIndex == tab.index
-                        PanelActionButton(
-                            label = tab.title,
-                            icon = tab.icon,
-                            iconTint = if (isSelected) accent else secondaryFg,
-                            textColor = if (isSelected) accent else fg,
-                            containerColor = if (isSelected) accent.copy(alpha = 0.16f) else Color.Transparent,
-                            testTag = "floating_tab_${tab.testTag}",
-                            onClick = {
-                                onSelectTab(tab.index)
-                                onExpandedChange(false)
-                            }
-                        )
-                    }
-
-                    HorizontalDivider(
-                        color = border.copy(alpha = 0.55f),
-                        modifier = Modifier.padding(vertical = 2.dp)
-                    )
-
-                    PanelActionButton(
-                        label = "Settings",
-                        icon = Icons.Default.Settings,
-                        iconTint = secondaryFg,
-                        textColor = fg,
-                        containerColor = Color.Transparent,
-                        testTag = "floating_quick_settings",
-                        onClick = {
-                            onExpandedChange(false)
-                            onOpenSettings()
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(elevated.copy(alpha = 0.75f))
+                                .clickable {
+                                    onExpandedChange(false)
+                                    onOpenSettings()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 8.dp)
+                                .testTag("floating_quick_settings"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Settings",
+                                tint = secondaryFg,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Settings",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = fg,
+                                maxLines = 1
+                            )
                         }
-                    )
+                    }
 
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(accent.copy(alpha = 0.90f))
+                            .background(accent.copy(alpha = 0.96f))
                             .clickable {
                                 onExpandedChange(false)
                                 onShowBars()
@@ -625,20 +778,88 @@ fun MovableFloatingControlPanel(
                         Icon(
                             imageVector = Icons.Default.FullscreenExit,
                             contentDescription = "Show Top & Bottom Bars",
-                            tint = Color(0xFF000000),
-                            modifier = Modifier.size(16.dp)
+                            tint = onAccent,
+                            modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Show Bars",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF000000)
+                            color = onAccent
                         )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PanelDropdownHeader(
+    label: String,
+    badge: String?,
+    icon: ImageVector,
+    expanded: Boolean,
+    accent: Color,
+    fg: Color,
+    secondaryFg: Color,
+    elevated: Color,
+    border: Color,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (expanded) accent.copy(alpha = 0.12f) else elevated.copy(alpha = 0.72f))
+            .border(
+                width = 1.dp,
+                color = if (expanded) accent.copy(alpha = 0.45f) else border.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (expanded) accent else secondaryFg,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (expanded) accent else fg,
+                maxLines = 1
+            )
+            if (!badge.isNullOrBlank() && !expanded) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = badge,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Icon(
+            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = if (expanded) "Collapse $label" else "Expand $label",
+            tint = if (expanded) accent else secondaryFg,
+            modifier = Modifier.size(17.dp)
+        )
     }
 }
 
@@ -655,10 +876,10 @@ private fun PanelActionButton(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(containerColor)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = 9.dp, vertical = 7.dp)
             .testTag(testTag),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -666,12 +887,12 @@ private fun PanelActionButton(
             imageVector = icon,
             contentDescription = label,
             tint = iconTint,
-            modifier = Modifier.size(16.dp)
+            modifier = Modifier.size(15.dp)
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(7.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

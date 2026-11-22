@@ -11,14 +11,18 @@ import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebViewDatabase
 import com.example.BuildConfig
 import com.example.notifications.PulseNotificationManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,6 +71,16 @@ enum class DevWebWorkspace(
             WorkspaceShortcut("account", "Account", "https://supabase.com/dashboard/account/me"),
             WorkspaceShortcut("docs", "Docs", "https://supabase.com/docs")
         )
+    ),
+    GEMINI(
+        id = "gemini",
+        displayName = "Gemini",
+        hostDomain = "gemini.google.com",
+        shortcuts = listOf(
+            WorkspaceShortcut("chat", "Chat", "https://gemini.google.com/app"),
+            WorkspaceShortcut("gems", "Gems", "https://gemini.google.com/gems/view"),
+            WorkspaceShortcut("saved", "Saved", "https://gemini.google.com/saved-info")
+        )
     );
 
     val defaultShortcut: WorkspaceShortcut get() = shortcuts.first()
@@ -106,6 +120,9 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
     private val _continuityState = MutableStateFlow(WebViewContinuityState())
     val continuityState: StateFlow<WebViewContinuityState> = _continuityState.asStateFlow()
 
+    private val _rendererGeneration = MutableStateFlow(0)
+    val rendererGeneration: StateFlow<Int> = _rendererGeneration.asStateFlow()
+
     fun isPinnedInRam(): Boolean = pinnedWebView != null
 
     fun currentUrl(): String {
@@ -141,6 +158,12 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                 lower.contains("/docs") -> "docs"
                 lower.contains("/account") -> "account"
                 else -> "projects"
+            }
+
+            DevWebWorkspace.GEMINI -> when {
+                lower.contains("/gems") -> "gems"
+                lower.contains("/saved-info") -> "saved"
+                else -> "chat"
             }
         }
         _activeShortcutId.value = matched
@@ -372,9 +395,14 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
         }
     }
 
-    private fun injectNotificationShim(webView: WebView?) {
+    private fun injectNotificationShim(webView: WebView?, pageUrl: String? = null) {
         val target = webView ?: return
-        val prefix = PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX
+        val candidateUrl = pageUrl ?: try { target.url.orEmpty() } catch (_: Exception) { "" }
+        // Only inject authenticated notification nonce into verified HTTPS pages for this workspace domain
+        if (!RetainedWebViewManager.isHostMatchingDomain(candidateUrl, workspace.hostDomain, requireHttps = true)) {
+            return
+        }
+        val prefix = PulseNotificationManager.buildAuthenticatedConsolePrefix()
         val workspaceName = workspace.displayName
         val tagDefault = "${workspace.id}_web"
         val js = """
@@ -382,6 +410,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
               try {
                 if (window.__agWorkspaceNotifyShimmed) { return; }
                 window.__agWorkspaceNotifyShimmed = true;
+                var nativeConsoleInfo = console.info.bind(console);
                 function emitWorkspaceNotify(title, options) {
                   try {
                     var opts = options || {};
@@ -390,7 +419,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                       body: String(opts.body || '').slice(0, 360),
                       tag: String(opts.tag || '$tagDefault').slice(0, 64)
                     };
-                    console.info('$prefix' + JSON.stringify(payload));
+                    nativeConsoleInfo('$prefix' + JSON.stringify(payload));
                   } catch (e) {}
                 }
                 function WorkspaceNotification(title, options) {
@@ -435,14 +464,29 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
         }
     }
 
-    fun clearSensitiveBrowsingData() {
+    fun clearSensitiveBrowsingData(context: Context? = null) {
+        val oldView = pinnedWebView
+        pinnedWebView = null
         try {
-            pinnedWebView?.clearCache(true)
-            pinnedWebView?.clearHistory()
-            pinnedWebView?.clearFormData()
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
+            oldView?.stopLoading()
+            oldView?.loadUrl("about:blank")
+            oldView?.clearCache(true)
+            oldView?.clearHistory()
+            oldView?.clearFormData()
+            (oldView?.parent as? ViewGroup)?.removeView(oldView)
+            oldView?.destroy()
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.removeSessionCookies(null)
+            cookieManager.removeAllCookies(null)
+            cookieManager.flush()
+            WebStorage.getInstance().deleteAllData()
+            context?.let {
+                WebViewDatabase.getInstance(it.applicationContext).clearHttpAuthUsernamePassword()
+            }
         } catch (_: Exception) {
+        }
+        _continuityState.value.cachedSnapshot?.let { bmp ->
+            if (!bmp.isRecycled) bmp.recycle()
         }
         currentLoadedUrl = ""
         lastGoodUrl = workspace.defaultShortcut.url
@@ -451,6 +495,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
         _isDesktopModeState.value = false
         _continuityState.value = WebViewContinuityState()
         _canGoBackState.value = false
+        _rendererGeneration.value = _rendererGeneration.value + 1
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -472,13 +517,13 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setLayerType(View.LAYER_TYPE_NONE, null)
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
                 } catch (_: Exception) {
                 }
             }
@@ -496,7 +541,8 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                 @Suppress("DEPRECATION")
                 saveFormData = false
                 setGeolocationEnabled(false)
-                allowContentAccess = true
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
                 cacheMode = WebSettings.LOAD_DEFAULT
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -555,13 +601,16 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                     val raw = consoleMessage?.message()
                     if (raw != null && raw.startsWith(PulseNotificationManager.WEB_NOTIFY_CONSOLE_PREFIX)) {
-                        val parsed = PulseNotificationManager.parseWebNotificationConsolePayload(raw)
-                        if (parsed != null) {
-                            RetainedWebViewManager.onWebNotificationReceived?.invoke(
-                                parsed.title,
-                                parsed.body,
-                                parsed.tag
-                            )
+                        val activePageUrl = try { pinnedWebView?.url.orEmpty() } catch (_: Exception) { "" }
+                        if (RetainedWebViewManager.isHostMatchingDomain(activePageUrl, workspace.hostDomain, requireHttps = true)) {
+                            val parsed = PulseNotificationManager.parseAuthenticatedWebNotificationPayload(raw)
+                            if (parsed != null) {
+                                RetainedWebViewManager.onWebNotificationReceived?.invoke(
+                                    parsed.title,
+                                    parsed.body,
+                                    parsed.tag
+                                )
+                            }
                         }
                         return true
                     }
@@ -581,6 +630,14 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
             }
 
             webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? {
+                    return RetainedWebViewManager.interceptUnsafeSubresource(request)
+                        ?: super.shouldInterceptRequest(view, request)
+                }
+
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?
@@ -596,17 +653,19 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                         mainFrameFailedInCurrentLoad = false
                         currentLoadedUrl = url
                         lastGoodUrl = url
-                        if (url.contains(workspace.hostDomain, ignoreCase = true)) {
+                        if (RetainedWebViewManager.isHostMatchingDomain(url, workspace.hostDomain, requireHttps = true)) {
                             updateShortcutFromUrl(url)
+                            injectNotificationShim(view, url)
                         }
-                        injectNotificationShim(view)
                     }
                 }
 
                 override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
                     super.doUpdateVisitedHistory(view, url, isReload)
                     refreshCanGoBack(view)
-                    if (!url.isNullOrBlank() && url.contains(workspace.hostDomain, ignoreCase = true)) {
+                    if (!url.isNullOrBlank() &&
+                        RetainedWebViewManager.isHostMatchingDomain(url, workspace.hostDomain, requireHttps = true)
+                    ) {
                         currentLoadedUrl = url
                         lastGoodUrl = url
                         updateShortcutFromUrl(url)
@@ -660,8 +719,9 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                     if (!mainFrameFailedInCurrentLoad && !isErrorPage && RetainedWebViewManager.isSafeHttpUrl(url.orEmpty())) {
                         currentLoadedUrl = url.orEmpty()
                         lastGoodUrl = url.orEmpty()
-                        if (currentLoadedUrl.contains(workspace.hostDomain, ignoreCase = true)) {
+                        if (RetainedWebViewManager.isHostMatchingDomain(currentLoadedUrl, workspace.hostDomain, requireHttps = true)) {
                             updateShortcutFromUrl(currentLoadedUrl)
+                            injectNotificationShim(view, currentLoadedUrl)
                         }
                         val prev = _continuityState.value
                         val wasRecovering = prev.status == OfflineRecoveryStatus.RECONNECTING || prev.hadMainFrameError
@@ -672,7 +732,6 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                             status = if (wasRecovering) OfflineRecoveryStatus.RESTORED else OfflineRecoveryStatus.ONLINE,
                             statusMessage = if (wasRecovering) "Back online • ${workspace.displayName} updated" else ""
                         )
-                        injectNotificationShim(view)
                         view?.postDelayed({ captureLatestSnapshotIfHealthy(view) }, 650L)
                     }
                     if (!isErrorPage) {
@@ -681,6 +740,27 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                         }
                         applyLagBooster(domLagBoosterActive)
                     }
+                }
+
+                override fun onRenderProcessGone(
+                    view: WebView?,
+                    detail: RenderProcessGoneDetail?
+                ): Boolean {
+                    val crashedView = view ?: pinnedWebView
+                    if (pinnedWebView === crashedView) {
+                        pinnedWebView = null
+                    }
+                    currentLoadedUrl = ""
+                    WebViewOfflineCacheHelper.runOnMainThread {
+                        try {
+                            (crashedView?.parent as? ViewGroup)?.removeView(crashedView)
+                            crashedView?.destroy()
+                        } catch (_: Exception) {
+                        }
+                    }
+                    _rendererGeneration.value = _rendererGeneration.value + 1
+                    onPageEvent("${workspace.displayName} renderer recovered automatically.")
+                    return true
                 }
             }
             pinnedWebView = this
@@ -734,7 +814,7 @@ object DevWebWorkspaceRegistry {
         sessions.values.forEach { if (it.isPinnedInRam()) it.applyLagBooster(enabled) }
     }
 
-    fun clearAllSensitiveBrowsingData() {
-        sessions.values.forEach { it.clearSensitiveBrowsingData() }
+    fun clearAllSensitiveBrowsingData(context: Context? = null) {
+        sessions.values.forEach { it.clearSensitiveBrowsingData(context) }
     }
 }

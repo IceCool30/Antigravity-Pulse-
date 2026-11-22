@@ -164,7 +164,7 @@ fun OfflineContinuityOverlay(
                             onClick = onRetryOrReloadLatest,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = accent,
-                                contentColor = Color(0xFF000000)
+                                contentColor = appearance.onAccentColor
                             ),
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
                             modifier = Modifier
@@ -197,7 +197,7 @@ fun OfflineContinuityOverlay(
             val isRestoredOrReconnecting =
                 continuity.status == OfflineRecoveryStatus.RESTORED ||
                     continuity.status == OfflineRecoveryStatus.RECONNECTING
-            val pillAccent = if (isRestoredOrReconnecting) EmeraldOnline else accent
+            val pillAccent = if (isRestoredOrReconnecting) appearance.successColor else accent
 
             Row(
                 modifier = Modifier

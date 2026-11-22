@@ -8,7 +8,11 @@ service cloud.firestore {
 
     // 2. Zero-Trust Reusable Primitives
     function isSignedIn() {
-      return request.auth != null && request.auth.uid is string && request.auth.uid.size() > 0;
+      return request.auth != null &&
+             request.auth.uid is string &&
+             request.auth.uid.size() > 0 &&
+             (!('firebase' in request.auth.token) ||
+              request.auth.token.firebase.sign_in_provider != 'anonymous');
     }
 
     function isOwner(userId) {
@@ -17,6 +21,21 @@ service cloud.firestore {
 
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSafeCloudEndpointUrl(url) {
+      return url is string &&
+             url.size() >= 8 &&
+             url.size() <= 300 &&
+             // Strictly http(s)://host[:port][/safe-path] — blocks userinfo (@), query (?), fragment (#),
+             // backslashes, whitespace, quotes, angle brackets, and control characters
+             url.matches('^https?://[a-zA-Z0-9._:\\[\\]-]+(:[0-9]{1,5})?(/[a-zA-Z0-9._~/%+-]*)?$') &&
+             // Block link-local cloud metadata and unspecified addresses
+             !url.lower().matches('^https?://(0\\.0\\.0\\.0|169\\.254\\.|\\[?::\\]?|metadata\\.google\\.internal|metadata\\.goog|metadata(/|:|$)).*$');
+    }
+
+    function isWithinListLimit() {
+      return request.query.limit == null || (request.query.limit >= 1 && request.query.limit <= 100);
     }
 
     function incoming() {
@@ -30,9 +49,8 @@ service cloud.firestore {
     // 3. Hardened Entity Validation Blueprints
     function isValidCloudServerProfile(data) {
       return data.userId is string && data.userId == request.auth.uid &&
-             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
-             data.endpointUrl is string && data.endpointUrl.size() >= 8 && data.endpointUrl.size() <= 300 &&
-             data.endpointUrl.matches('^https?://.*') &&
+             data.name is string && data.name.trim().size() >= 1 && data.name.size() <= 80 &&
+             isSafeCloudEndpointUrl(data.endpointUrl) &&
              data.connectionMode is string && (
                data.connectionMode == 'HYBRID_BRIDGE' ||
                data.connectionMode == 'DIRECT_TUNNEL' ||
@@ -43,23 +61,25 @@ service cloud.firestore {
              data.keepAlivePinned is bool &&
              data.lastLatencyMs is int && data.lastLatencyMs >= 0 && data.lastLatencyMs <= 60000 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             data.updatedAt >= data.createdAt;
     }
 
     function isValidCloudCopilotPrompt(data) {
       return data.userId is string && data.userId == request.auth.uid &&
-             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
-             data.promptText is string && data.promptText.size() >= 1 && data.promptText.size() <= 5000 &&
-             data.rolePersona is string && data.rolePersona.size() >= 1 && data.rolePersona.size() <= 80 &&
-             data.preferredModel is string && data.preferredModel.size() >= 1 && data.preferredModel.size() <= 80 &&
+             data.title is string && data.title.trim().size() >= 1 && data.title.size() <= 120 &&
+             data.promptText is string && data.promptText.trim().size() >= 1 && data.promptText.size() <= 5000 &&
+             data.rolePersona is string && data.rolePersona.trim().size() >= 1 && data.rolePersona.size() <= 80 &&
+             data.preferredModel is string && data.preferredModel.trim().size() >= 1 && data.preferredModel.size() <= 80 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+             data.updatedAt is timestamp && data.updatedAt <= request.time &&
+             data.updatedAt >= data.createdAt;
     }
 
     // 4. Strictly User-Isolated Collections
     match /users/{userId}/serverProfiles/{profileId} {
       allow get: if isOwner(userId) && isValidId(profileId);
-      allow list: if isOwner(userId);
+      allow list: if isOwner(userId) && isWithinListLimit();
 
       allow create: if isOwner(userId) &&
                        isValidId(profileId) &&
@@ -77,9 +97,15 @@ service cloud.firestore {
 
       allow update: if isOwner(userId) &&
                        isValidId(profileId) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'name', 'endpointUrl', 'connectionMode',
+                         'authToken', 'keepAlivePinned', 'lastLatencyMs',
+                         'createdAt', 'updatedAt'
+                       ]) &&
                        isValidCloudServerProfile(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt >= existing().updatedAt &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'name', 'endpointUrl', 'connectionMode',
                          'authToken', 'keepAlivePinned', 'lastLatencyMs',
@@ -91,7 +117,7 @@ service cloud.firestore {
 
     match /users/{userId}/copilotPrompts/{promptId} {
       allow get: if isOwner(userId) && isValidId(promptId);
-      allow list: if isOwner(userId);
+      allow list: if isOwner(userId) && isWithinListLimit();
 
       allow create: if isOwner(userId) &&
                        isValidId(promptId) &&
@@ -107,9 +133,14 @@ service cloud.firestore {
 
       allow update: if isOwner(userId) &&
                        isValidId(promptId) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'title', 'promptText', 'rolePersona',
+                         'preferredModel', 'createdAt', 'updatedAt'
+                       ]) &&
                        isValidCloudCopilotPrompt(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt >= existing().updatedAt &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
                          'title', 'promptText', 'rolePersona',
                          'preferredModel', 'updatedAt'

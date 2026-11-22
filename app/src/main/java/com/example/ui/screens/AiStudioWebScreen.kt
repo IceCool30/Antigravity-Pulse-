@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.key
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -75,6 +76,7 @@ fun AiStudioWebScreen(
     val activeSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
     val loadProgress by AiStudioPinnedWebViewManager.pageLoadProgress.collectAsStateWithLifecycle()
     val continuity by AiStudioPinnedWebViewManager.continuityState.collectAsStateWithLifecycle()
+    val rendererGeneration by AiStudioPinnedWebViewManager.rendererGeneration.collectAsStateWithLifecycle()
 
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
@@ -174,7 +176,10 @@ fun AiStudioWebScreen(
                                     try {
                                         val url = AiStudioPinnedWebViewManager.currentUrl()
                                         if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                                            )
                                         } else {
                                             onStatusEvent("Blocked unsafe external URL.")
                                         }
@@ -220,8 +225,8 @@ fun AiStudioWebScreen(
                                 }
                             },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = EmeraldOnline.copy(alpha = 0.2f),
-                                selectedLabelColor = EmeraldOnline
+                                selectedContainerColor = appearance.successColor.copy(alpha = 0.16f),
+                                selectedLabelColor = appearance.successColor
                             ),
                             modifier = Modifier.testTag("ai_studio_lag_booster_toggle")
                         )
@@ -257,23 +262,25 @@ fun AiStudioWebScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            AndroidView(
-                factory = { ctx ->
-                    AiStudioPinnedWebViewManager.obtainPinnedWebView(
-                        context = ctx,
-                        initialSection = activeSection,
-                        domLagBooster = domLagBoosterEnabled,
-                        onPageEvent = onStatusEvent
-                    )
-                },
-                update = { _ ->
-                    // No-op on recomposition so AI Studio stays pinned in RAM without flicker or reload
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .testTag("ai_studio_pinned_webview_container")
-            )
+            key(rendererGeneration) {
+                AndroidView(
+                    factory = { ctx ->
+                        AiStudioPinnedWebViewManager.obtainPinnedWebView(
+                            context = ctx,
+                            initialSection = activeSection,
+                            domLagBooster = domLagBoosterEnabled,
+                            onPageEvent = onStatusEvent
+                        )
+                    },
+                    update = { _ ->
+                        // No-op on recomposition so AI Studio stays pinned in RAM without flicker or reload
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .testTag("ai_studio_pinned_webview_container")
+                )
+            }
 
             OfflineContinuityOverlay(
                 continuity = continuity,

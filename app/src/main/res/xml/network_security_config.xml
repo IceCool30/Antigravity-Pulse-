@@ -2,9 +2,28 @@
 <network-security-config>
     <!--
         Trust only verified system Certificate Authorities (blocks rogue user-installed MITM CAs).
-        Cleartext HTTP is permitted only when explicitly needed for local LAN workstations;
+        Cleartext HTTP is strictly prohibited for all cloud, OAuth, and first-party workspace domains.
+        Local LAN workstations may still use HTTP only when explicitly entered by the user;
         HTTPS is always preferred and invalid SSL certificates are strictly cancelled in WebView.
     -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">google.com</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">gstatic.com</domain>
+        <domain includeSubdomains="true">googleusercontent.com</domain>
+        <domain includeSubdomains="true">github.com</domain>
+        <domain includeSubdomains="true">githubusercontent.com</domain>
+        <domain includeSubdomains="true">vercel.com</domain>
+        <domain includeSubdomains="true">supabase.com</domain>
+        <domain includeSubdomains="true">supabase.co</domain>
+        <domain includeSubdomains="true">firebaseapp.com</domain>
+        <domain includeSubdomains="true">firebaseio.com</domain>
+        <domain includeSubdomains="true">cloudfunctions.net</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />

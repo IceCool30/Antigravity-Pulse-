@@ -38,22 +38,48 @@ fun Modifier.frostedGlass(
     }
 
     val isDarkBase = (baseColor.red * 0.299f + baseColor.green * 0.587f + baseColor.blue * 0.114f) < 0.5f
-    val topSheen = if (isDarkBase) Color.White.copy(alpha = 0.075f) else Color.White.copy(alpha = 0.45f)
-    val midSheen = tintColor.copy(alpha = tintAlpha.coerceIn(0f, 0.22f))
-    val bottomSheen = if (isDarkBase) Color.Black.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.12f)
+    val effectiveFillAlpha = if (isDarkBase) {
+        fillAlpha.coerceIn(0.25f, 0.96f)
+    } else {
+        // Keep daylight glass crisp and legible over bright canvases and WebViews
+        fillAlpha.coerceAtLeast(0.88f).coerceAtMost(0.98f)
+    }
 
-    val borderBrush = Brush.linearGradient(
-        colors = listOf(
-            if (isDarkBase) Color.White.copy(alpha = (borderAlpha * 0.42f).coerceIn(0.08f, 0.40f))
-            else Color.White.copy(alpha = 0.85f),
-            tintColor.copy(alpha = (borderAlpha * 0.38f).coerceIn(0.08f, 0.42f)),
-            borderColor.copy(alpha = (borderAlpha * 0.60f).coerceIn(0.12f, 0.65f))
+    val topSheen = if (isDarkBase) Color.White.copy(alpha = 0.075f) else Color.White.copy(alpha = 0.26f)
+    val midSheen = if (isDarkBase) {
+        tintColor.copy(alpha = tintAlpha.coerceIn(0f, 0.22f))
+    } else {
+        tintColor.copy(alpha = (tintAlpha * 0.55f).coerceIn(0f, 0.07f))
+    }
+    val bottomSheen = if (isDarkBase) {
+        Color.Black.copy(alpha = 0.12f)
+    } else {
+        // Delicate cool-slate bottom shade gives physical elevation instead of white-on-white glare
+        Color(0xFF0F172A).copy(alpha = 0.035f)
+    }
+
+    val borderBrush = if (isDarkBase) {
+        Brush.linearGradient(
+            colors = listOf(
+                Color.White.copy(alpha = (borderAlpha * 0.42f).coerceIn(0.08f, 0.40f)),
+                tintColor.copy(alpha = (borderAlpha * 0.38f).coerceIn(0.08f, 0.42f)),
+                borderColor.copy(alpha = (borderAlpha * 0.60f).coerceIn(0.12f, 0.65f))
+            )
         )
-    )
+    } else {
+        // Never start light-mode borders with white (which vanishes on white backgrounds)
+        Brush.linearGradient(
+            colors = listOf(
+                borderColor.copy(alpha = borderAlpha.coerceIn(0.52f, 0.84f)),
+                tintColor.copy(alpha = (borderAlpha * 0.52f).coerceIn(0.26f, 0.62f)),
+                Color(0xFF0F172A).copy(alpha = (borderAlpha * 0.26f).coerceIn(0.14f, 0.28f))
+            )
+        )
+    }
 
     return this
         .clip(shape)
-        .background(baseColor.copy(alpha = fillAlpha.coerceIn(0.25f, 0.96f)))
+        .background(baseColor.copy(alpha = effectiveFillAlpha))
         .background(
             Brush.verticalGradient(
                 colors = listOf(topSheen, midSheen, bottomSheen)

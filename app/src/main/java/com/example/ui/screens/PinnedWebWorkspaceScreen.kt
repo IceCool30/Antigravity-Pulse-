@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +79,7 @@ fun PinnedWebWorkspaceScreen(
     val isDesktopMode by session.isDesktopModeState.collectAsStateWithLifecycle()
     val loadProgress by session.pageLoadProgress.collectAsStateWithLifecycle()
     val continuity by session.continuityState.collectAsStateWithLifecycle()
+    val rendererGeneration by session.rendererGeneration.collectAsStateWithLifecycle()
 
     val appearance = LocalAppearanceSettings.current
     val bg = appearance.backgroundColor
@@ -178,7 +180,10 @@ fun PinnedWebWorkspaceScreen(
                                     try {
                                         val url = session.currentUrl()
                                         if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                                            )
                                         } else {
                                             onStatusEvent("Blocked unsafe external URL.")
                                         }
@@ -250,11 +255,11 @@ fun PinnedWebWorkspaceScreen(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(
-                                    if (domLagBoosterEnabled) EmeraldOnline.copy(alpha = 0.14f) else elevated
+                                    if (domLagBoosterEnabled) appearance.successColor.copy(alpha = 0.14f) else elevated
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = if (domLagBoosterEnabled) EmeraldOnline.copy(alpha = 0.55f) else border,
+                                    color = if (domLagBoosterEnabled) appearance.successColor.copy(alpha = 0.55f) else border,
                                     shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable { onToggleDomBooster(!domLagBoosterEnabled) }
@@ -265,7 +270,7 @@ fun PinnedWebWorkspaceScreen(
                             Icon(
                                 imageVector = Icons.Default.Bolt,
                                 contentDescription = "Lag Booster",
-                                tint = if (domLagBoosterEnabled) EmeraldOnline else secondaryFg,
+                                tint = if (domLagBoosterEnabled) appearance.successColor else secondaryFg,
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
@@ -273,7 +278,7 @@ fun PinnedWebWorkspaceScreen(
                                 text = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (domLagBoosterEnabled) EmeraldOnline else secondaryFg
+                                color = if (domLagBoosterEnabled) appearance.successColor else secondaryFg
                             )
                         }
 
@@ -281,10 +286,10 @@ fun PinnedWebWorkspaceScreen(
                             text = "Pinned in RAM",
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = JetBrainsMonoFontFamily,
-                            color = EmeraldOnline,
+                            color = appearance.successColor,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(EmeraldOnline.copy(alpha = 0.12f))
+                                .background(appearance.successColor.copy(alpha = 0.12f))
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                                 .testTag("${workspace.id}_pinned_ram_badge")
                         )
@@ -312,19 +317,21 @@ fun PinnedWebWorkspaceScreen(
                 .background(bg)
                 .testTag("${workspace.id}_pinned_webview_container")
         ) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    session.obtainPinnedWebView(
-                        context = ctx,
-                        domLagBooster = domLagBoosterEnabled,
-                        onPageEvent = onStatusEvent
-                    )
-                },
-                update = { _ ->
-                    session.applyLagBooster(domLagBoosterEnabled)
-                }
-            )
+            key(workspace, rendererGeneration) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        session.obtainPinnedWebView(
+                            context = ctx,
+                            domLagBooster = domLagBoosterEnabled,
+                            onPageEvent = onStatusEvent
+                        )
+                    },
+                    update = { _ ->
+                        session.applyLagBooster(domLagBoosterEnabled)
+                    }
+                )
+            }
 
             OfflineContinuityOverlay(
                 continuity = continuity,
