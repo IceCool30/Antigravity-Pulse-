@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">Antigravity Pulse</string>
     <string name="nav_bridge">Remote</string>
+    <string name="nav_t3_code">T3 Code</string>
     <string name="nav_ai_studio">AI Studio</string>
     <string name="nav_gemini">Gemini</string>
     <string name="nav_github">GitHub</string>

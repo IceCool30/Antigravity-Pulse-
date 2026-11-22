@@ -31,8 +31,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -110,6 +112,8 @@ fun MovableFloatingControlPanel(
     activeAiStudioSection: AiStudioWebSection = AiStudioWebSection.NEW_CHAT,
     activeDevWorkspace: DevWebWorkspace? = null,
     activeDevShortcutId: String = "",
+    isT3CodeActive: Boolean = false,
+    activeT3EnvironmentLabel: String = "T3 Code Cloud",
     isBrowserActive: Boolean = false,
     isBrowserBarVisible: Boolean = true,
     browserTabCount: Int = 1,
@@ -126,6 +130,10 @@ fun MovableFloatingControlPanel(
     onSelectTab: (Int) -> Unit,
     onSelectAiStudioSection: (AiStudioWebSection) -> Unit = {},
     onSelectDevShortcut: (WorkspaceShortcut) -> Unit = {},
+    onOpenT3CloudHome: () -> Unit = {},
+    onOpenT3Environments: () -> Unit = {},
+    onOpenT3QrScanner: () -> Unit = {},
+    onOpenT3External: () -> Unit = {},
     onToggleDesktopMode: (Boolean) -> Unit = {},
     onToggleDomBooster: (Boolean) -> Unit = {},
     onOpenAiStudioExternal: () -> Unit = {},
@@ -268,6 +276,7 @@ fun MovableFloatingControlPanel(
         } else {
             val activeTabLabel = tabs.firstOrNull { it.index == selectedTabIndex }?.title ?: "Remote"
             val headerTitle = when {
+                isT3CodeActive -> "T3 Code"
                 isAiStudioActive -> "AI Studio"
                 activeDevWorkspace != null -> activeDevWorkspace.displayName
                 isBrowserActive -> "Browser ($browserTabCount)"
@@ -483,6 +492,75 @@ fun MovableFloatingControlPanel(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             when {
+                                isT3CodeActive -> {
+                                    PanelActionButton(
+                                        label = "app.t3.codes (Cloud)",
+                                        icon = Icons.Default.Cloud,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_t3_cloud_home",
+                                        onClick = {
+                                            onOpenT3CloudHome()
+                                            onExpandedChange(false)
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = "Envs: ${activeT3EnvironmentLabel.take(14)}",
+                                        icon = Icons.Default.Dns,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = accent.copy(alpha = 0.14f),
+                                        testTag = "floating_t3_environments",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenT3Environments()
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = "Scan T3 Pairing QR",
+                                        icon = Icons.Default.QrCodeScanner,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_t3_scan_qr",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenT3QrScanner()
+                                        }
+                                    )
+                                    PanelActionButton(
+                                        label = if (isDesktopModeEnabled) "Desktop View: ON" else "Desktop View: OFF",
+                                        icon = if (isDesktopModeEnabled) Icons.Default.DesktopWindows else Icons.Default.Smartphone,
+                                        iconTint = if (isDesktopModeEnabled) accent else secondaryFg,
+                                        textColor = if (isDesktopModeEnabled) accent else fg,
+                                        containerColor = if (isDesktopModeEnabled) accent.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_t3_desktop_mode",
+                                        onClick = { onToggleDesktopMode(!isDesktopModeEnabled) }
+                                    )
+                                    PanelActionButton(
+                                        label = if (domLagBoosterEnabled) "Lag Booster: ON" else "Lag Booster: OFF",
+                                        icon = Icons.Default.Bolt,
+                                        iconTint = if (domLagBoosterEnabled) successColor else secondaryFg,
+                                        textColor = if (domLagBoosterEnabled) successColor else fg,
+                                        containerColor = if (domLagBoosterEnabled) successColor.copy(alpha = 0.14f) else elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_t3_lag_booster",
+                                        onClick = { onToggleDomBooster(!domLagBoosterEnabled) }
+                                    )
+                                    PanelActionButton(
+                                        label = "Open in Browser",
+                                        icon = Icons.AutoMirrored.Filled.OpenInNew,
+                                        iconTint = accent,
+                                        textColor = fg,
+                                        containerColor = elevated.copy(alpha = 0.72f),
+                                        testTag = "floating_t3_open_browser",
+                                        onClick = {
+                                            onExpandedChange(false)
+                                            onOpenT3External()
+                                        }
+                                    )
+                                }
+
                                 isAiStudioActive -> {
                                     PanelActionButton(
                                         label = "Prompts",

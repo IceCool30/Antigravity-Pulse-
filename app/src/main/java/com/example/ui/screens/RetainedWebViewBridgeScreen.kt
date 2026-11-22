@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -94,6 +95,7 @@ fun RetainedWebViewBridgeScreen(
     onOpenHostSwitcher: () -> Unit = {},
     onOpenQrScanner: () -> Unit,
     onOpenAiStudio: () -> Unit = {},
+    onOpenT3Code: () -> Unit = {},
     onJsBridgeEvent: (String) -> Unit
 ) {
     val appearance = LocalAppearanceSettings.current
@@ -295,12 +297,13 @@ fun RetainedWebViewBridgeScreen(
                 )
             }
 
-            // Native Welcome Guide with direct Antigravity Remote & Google AI Studio launch buttons
+            // Native Welcome Guide with direct Antigravity Remote, T3 Code Web & Google AI Studio launch buttons
             if (showNativeWelcome) {
                 NativeWelcomeLandingScreen(
                     onLaunchRemote = onOpenHostSwitcher,
                     onScanQr = onOpenQrScanner,
-                    onLaunchAiStudio = onOpenAiStudio
+                    onLaunchAiStudio = onOpenAiStudio,
+                    onLaunchT3Code = onOpenT3Code
                 )
             }
         }
@@ -317,7 +320,8 @@ private data class WelcomeGuideItem(
 private fun NativeWelcomeLandingScreen(
     onLaunchRemote: () -> Unit,
     onScanQr: () -> Unit,
-    onLaunchAiStudio: () -> Unit
+    onLaunchAiStudio: () -> Unit,
+    onLaunchT3Code: () -> Unit = {}
 ) {
     val appearance = LocalAppearanceSettings.current
     val isLightMode = appearance.isLightMode
@@ -566,6 +570,47 @@ private fun NativeWelcomeLandingScreen(
                         )
                         Text(
                             text = "Pair instantly with QR code",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium,
+                            color = fg
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = secondaryFg,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                HorizontalDivider(
+                    color = border.copy(alpha = if (isLightMode) 0.55f else 0.35f),
+                    thickness = 1.dp
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(onClick = onLaunchT3Code)
+                        .padding(horizontal = 8.dp, vertical = 8.dp)
+                        .testTag("welcome_launch_t3_code_button"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Terminal,
+                            contentDescription = "Open T3 Code Web",
+                            tint = accent,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Open T3 Code Web (app.t3.codes)",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Medium,
                             color = fg

@@ -85,6 +85,7 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -154,6 +155,7 @@ import com.example.data.remote.DevWebWorkspace
 import com.example.data.remote.DevWebWorkspaceRegistry
 import com.example.data.remote.PulseBrowserManager
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.T3CodePinnedWebViewManager
 import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.notifications.PulseNotificationManager
 import com.example.ui.components.FloatingPanelTabItem
@@ -165,6 +167,7 @@ import com.example.ui.screens.PulseBrowserScreen
 import com.example.ui.screens.QrPairingScannerDialog
 import com.example.ui.screens.RetainedWebViewBridgeScreen
 import com.example.ui.screens.StorageAndCloudSyncScreen
+import com.example.ui.screens.T3CodeWebScreen
 import com.example.ui.theme.AntigravityPulseTheme
 import com.example.ui.theme.AppearancePreferencesManager
 import com.example.ui.theme.AppearanceSettings
@@ -278,6 +281,7 @@ class MainActivity : FragmentActivity() {
         backgroundedAtElapsedMs = 0L
         RetainedWebViewManager.keepTimersRunning()
         AiStudioPinnedWebViewManager.keepTimersRunning()
+        T3CodePinnedWebViewManager.keepTimersRunning()
         DevWebWorkspaceRegistry.keepTimersRunningAll()
         PulseBrowserManager.keepTimersRunningAll()
     }
@@ -288,6 +292,8 @@ class MainActivity : FragmentActivity() {
         RetainedWebViewManager.keepTimersRunning()
         AiStudioPinnedWebViewManager.flushCookies()
         AiStudioPinnedWebViewManager.keepTimersRunning()
+        T3CodePinnedWebViewManager.flushCookies()
+        T3CodePinnedWebViewManager.keepTimersRunning()
         DevWebWorkspaceRegistry.flushCookiesAll()
         DevWebWorkspaceRegistry.keepTimersRunningAll()
         PulseBrowserManager.flushCookiesAll()
@@ -302,6 +308,8 @@ class MainActivity : FragmentActivity() {
         RetainedWebViewManager.keepTimersRunning()
         AiStudioPinnedWebViewManager.flushCookies()
         AiStudioPinnedWebViewManager.keepTimersRunning()
+        T3CodePinnedWebViewManager.flushCookies()
+        T3CodePinnedWebViewManager.keepTimersRunning()
         super.onStop()
     }
 }
@@ -496,6 +504,7 @@ private enum class PulseTab(
     val devWorkspace: DevWebWorkspace? = null
 ) {
     WEB_BRIDGE(R.string.nav_bridge, R.string.nav_bridge, Icons.Default.Language, "nav_tab_bridge"),
+    T3_CODE(R.string.nav_t3_code, R.string.nav_t3_code, Icons.Default.Terminal, "nav_tab_t3_code"),
     AI_STUDIO(R.string.nav_ai_studio, R.string.nav_ai_studio, Icons.Default.AutoAwesome, "nav_tab_ai_studio"),
     GEMINI(R.string.nav_gemini, R.string.nav_gemini, Icons.Default.Forum, "nav_tab_gemini", DevWebWorkspace.GEMINI),
     GITHUB(R.string.nav_github, R.string.nav_github, Icons.Default.Code, "nav_tab_github", DevWebWorkspace.GITHUB),
@@ -572,6 +581,11 @@ fun AntigravityPulseApp(
     val remoteCanGoBack by RetainedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
     val aiStudioCanGoBack by AiStudioPinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
     val activeAiStudioSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
+    val t3CanGoBack by T3CodePinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
+    val t3DesktopMode by T3CodePinnedWebViewManager.isDesktopModeState.collectAsStateWithLifecycle()
+    val t3Environments by T3CodePinnedWebViewManager.savedEnvironments.collectAsStateWithLifecycle()
+    val t3ActiveEnvId by T3CodePinnedWebViewManager.activeEnvironmentId.collectAsStateWithLifecycle()
+    val t3PopupWebView by T3CodePinnedWebViewManager.popupWebViewState.collectAsStateWithLifecycle()
     val githubSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GITHUB) }
     val vercelSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.VERCEL) }
     val supabaseSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.SUPABASE) }
@@ -598,6 +612,8 @@ fun AntigravityPulseApp(
     var showFloatingQuickMenu by rememberSaveable { mutableStateOf(false) }
     var showServerModal by rememberSaveable { mutableStateOf(false) }
     var showGlobalQrScanner by rememberSaveable { mutableStateOf(false) }
+    var showT3EnvironmentsDialog by rememberSaveable { mutableStateOf(false) }
+    var showT3QrScanner by rememberSaveable { mutableStateOf(false) }
 
     val activeProfile = serverProfiles.firstOrNull { it.isSelected } ?: serverProfiles.firstOrNull()
 
@@ -1031,6 +1047,7 @@ fun AntigravityPulseApp(
             offlineStartedAtMs.set(SystemClock.elapsedRealtime())
             RetainedWebViewManager.onNetworkLost()
             AiStudioPinnedWebViewManager.onNetworkLost()
+            T3CodePinnedWebViewManager.onNetworkLost()
             DevWebWorkspaceRegistry.onNetworkLostAll()
             PulseBrowserManager.onNetworkLostAll()
         }
@@ -1042,6 +1059,7 @@ fun AntigravityPulseApp(
                     offlineStartedAtMs.compareAndSet(0L, SystemClock.elapsedRealtime())
                     RetainedWebViewManager.onNetworkLost()
                     AiStudioPinnedWebViewManager.onNetworkLost()
+                    T3CodePinnedWebViewManager.onNetworkLost()
                     DevWebWorkspaceRegistry.onNetworkLostAll()
                     PulseBrowserManager.onNetworkLostAll()
                 }
@@ -1063,6 +1081,9 @@ fun AntigravityPulseApp(
                             autoReloadAfterLongOutage = shouldAutoReload
                         )
                         AiStudioPinnedWebViewManager.onNetworkRestored(
+                            autoReloadAfterLongOutage = shouldAutoReload
+                        )
+                        T3CodePinnedWebViewManager.onNetworkRestored(
                             autoReloadAfterLongOutage = shouldAutoReload
                         )
                         DevWebWorkspaceRegistry.onNetworkRestoredAll(
@@ -1105,6 +1126,7 @@ fun AntigravityPulseApp(
         }
         RetainedWebViewManager.clearSensitiveBrowsingData(context)
         AiStudioPinnedWebViewManager.clearSensitiveBrowsingData(context)
+        T3CodePinnedWebViewManager.clearSensitiveBrowsingData(context)
         DevWebWorkspaceRegistry.clearAllSensitiveBrowsingData(context)
         PulseBrowserManager.clearAllSensitiveBrowsingData(context)
         antigravityViewModel.clearAllLocalWorkspaceData()
@@ -1166,6 +1188,7 @@ fun AntigravityPulseApp(
 
     // Smart Back navigation: close floating panel -> pop active workspace/browser WebView history -> return to Remote -> pop Remote
     val currentPulseTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
+    val isT3CodeBackActive = currentPulseTab == PulseTab.T3_CODE && (t3CanGoBack || t3PopupWebView != null)
     val isAiStudioWebBackActive = currentPulseTab == PulseTab.AI_STUDIO && aiStudioCanGoBack
     val isBrowserBackActive = currentPulseTab == PulseTab.BROWSER && activeBrowserTab.canGoBack
     val activeDevBackSession = when (currentPulseTab) {
@@ -1180,12 +1203,14 @@ fun AntigravityPulseApp(
             (showFloatingQuickMenu ||
                 selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal ||
                 remoteCanGoBack ||
+                isT3CodeBackActive ||
                 isAiStudioWebBackActive ||
                 isBrowserBackActive ||
                 activeDevBackSession != null)
     ) {
         when {
             showFloatingQuickMenu -> showFloatingQuickMenu = false
+            isT3CodeBackActive -> T3CodePinnedWebViewManager.goBack()
             isAiStudioWebBackActive -> AiStudioPinnedWebViewManager.goBack()
             isBrowserBackActive -> PulseBrowserManager.goBackActiveTab()
             activeDevBackSession != null -> activeDevBackSession.goBack()
@@ -1515,6 +1540,7 @@ fun AntigravityPulseApp(
                                     onOpenHostSwitcher = { showServerModal = true },
                                     onOpenQrScanner = { showGlobalQrScanner = true },
                                     onOpenAiStudio = { selectedTabIndex = PulseTab.AI_STUDIO.ordinal },
+                                    onOpenT3Code = { selectedTabIndex = PulseTab.T3_CODE.ordinal },
                                     onJsBridgeEvent = { eventMsg ->
                                         antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
                                         if (appearance.isAppEventNotificationsEnabled &&
@@ -1526,6 +1552,18 @@ fun AntigravityPulseApp(
                                                 body = eventMsg
                                             )
                                         }
+                                    }
+                                )
+
+                                PulseTab.T3_CODE -> T3CodeWebScreen(
+                                    domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
+                                    isFullscreenBarsHidden = isBarsHidden,
+                                    showEnvironmentsDialog = showT3EnvironmentsDialog,
+                                    onShowEnvironmentsDialogChange = { showT3EnvironmentsDialog = it },
+                                    onOpenT3QrScanner = { showT3QrScanner = true },
+                                    onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
+                                    onStatusEvent = { eventMsg ->
+                                        antigravityViewModel.recordWebViewBridgeEvent(eventMsg)
                                     }
                                 )
 
@@ -1588,10 +1626,14 @@ fun AntigravityPulseApp(
                     // Compact Translucent Movable Side Panel (Active by default in Fullscreen Mode)
                     if (isBarsHidden) {
                         val activeTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
+                        val isOnT3Code = activeTab == PulseTab.T3_CODE
                         val isOnAiStudio = activeTab == PulseTab.AI_STUDIO
                         val isOnBrowser = activeTab == PulseTab.BROWSER
                         val activeDevWorkspace = activeTab.devWorkspace
                         val activeDevSession = activeDevWorkspace?.let { DevWebWorkspaceRegistry.session(it) }
+                        val activeT3EnvironmentLabel = t3Environments
+                            .firstOrNull { it.id == t3ActiveEnvId }?.label
+                            ?: T3CodePinnedWebViewManager.CLOUD_ENVIRONMENT.label
                         val activeDevShortcutId = when (activeDevWorkspace) {
                             DevWebWorkspace.GITHUB -> githubActiveShortcut
                             DevWebWorkspace.VERCEL -> vercelActiveShortcut
@@ -1600,6 +1642,7 @@ fun AntigravityPulseApp(
                             null -> ""
                         }
                         val activeDesktopMode = when {
+                            isOnT3Code -> t3DesktopMode
                             isOnBrowser -> activeBrowserTab.isDesktopMode
                             activeDevWorkspace == DevWebWorkspace.GITHUB -> githubDesktopMode
                             activeDevWorkspace == DevWebWorkspace.VERCEL -> vercelDesktopMode
@@ -1619,6 +1662,8 @@ fun AntigravityPulseApp(
                             activeAiStudioSection = activeAiStudioSection,
                             activeDevWorkspace = activeDevWorkspace,
                             activeDevShortcutId = activeDevShortcutId,
+                            isT3CodeActive = isOnT3Code,
+                            activeT3EnvironmentLabel = activeT3EnvironmentLabel,
                             isBrowserActive = isOnBrowser,
                             isBrowserBarVisible = isBrowserBarVisible,
                             browserTabCount = browserTabs.size,
@@ -1646,8 +1691,39 @@ fun AntigravityPulseApp(
                             onSelectDevShortcut = { shortcut ->
                                 activeDevSession?.navigateToShortcut(shortcut)
                             },
+                            onOpenT3CloudHome = {
+                                T3CodePinnedWebViewManager.navigateToCloudHome(context)
+                                antigravityViewModel.recordWebViewBridgeEvent("Opened T3 Code Cloud (app.t3.codes)")
+                            },
+                            onOpenT3Environments = {
+                                showT3EnvironmentsDialog = true
+                            },
+                            onOpenT3QrScanner = {
+                                showT3QrScanner = true
+                            },
+                            onOpenT3External = {
+                                try {
+                                    val url = T3CodePinnedWebViewManager.currentUrl()
+                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                .addCategory(Intent.CATEGORY_BROWSABLE)
+                                        )
+                                    } else {
+                                        antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
+                                    }
+                                } catch (_: Exception) {
+                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
+                                }
+                            },
                             onToggleDesktopMode = { enabled ->
-                                if (isOnBrowser) {
+                                if (isOnT3Code) {
+                                    T3CodePinnedWebViewManager.setDesktopMode(enabled)
+                                    antigravityViewModel.recordWebViewBridgeEvent(
+                                        if (enabled) "T3 Code: Desktop View enabled (pinch-to-zoom ON)"
+                                        else "T3 Code: Mobile View enabled"
+                                    )
+                                } else if (isOnBrowser) {
                                     PulseBrowserManager.setActiveTabDesktopMode(enabled)
                                     antigravityViewModel.recordWebViewBridgeEvent(
                                         if (enabled) "Browser: Desktop View enabled"
@@ -1717,6 +1793,7 @@ fun AntigravityPulseApp(
                             onOpenHostSwitcher = { showServerModal = true },
                             onOpenQrScanner = { showGlobalQrScanner = true },
                             reloadActionLabel = when {
+                                isOnT3Code -> "Reload T3 Code"
                                 isOnAiStudio -> "Reload AI Studio"
                                 isOnBrowser -> "Reload Page"
                                 activeDevWorkspace != null -> "Reload ${activeDevWorkspace.displayName}"
@@ -1724,6 +1801,11 @@ fun AntigravityPulseApp(
                             },
                             onReloadWeb = {
                                 when {
+                                    isOnT3Code -> {
+                                        T3CodePinnedWebViewManager.reloadCurrentPage()
+                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading T3 Code...")
+                                    }
+
                                     isOnAiStudio -> {
                                         AiStudioPinnedWebViewManager.reloadCurrentPage()
                                         antigravityViewModel.recordWebViewBridgeEvent("Reloading AI Studio...")
@@ -1938,14 +2020,65 @@ fun AntigravityPulseApp(
     if (showGlobalQrScanner) {
         QrPairingScannerDialog(
             onPairingScanned = { payload ->
-                connectAndOpenRemoteHost(
-                    hostName = payload.hostName,
-                    url = payload.endpointUrl,
-                    token = payload.authToken
+                val isT3Domain = RetainedWebViewManager.isHostMatchingDomain(
+                    payload.endpointUrl,
+                    T3CodePinnedWebViewManager.T3_CLOUD_DOMAIN,
+                    requireHttps = true
                 )
+                if (isT3Domain || currentPulseTab == PulseTab.T3_CODE) {
+                    val result = T3CodePinnedWebViewManager.openPairingOrCustomUrl(
+                        context = context,
+                        label = payload.hostName,
+                        rawUrl = payload.endpointUrl,
+                        saveBookmark = true
+                    )
+                    result.fold(
+                        onSuccess = { env ->
+                            selectedTabIndex = PulseTab.T3_CODE.ordinal
+                            antigravityViewModel.recordWebViewBridgeEvent("Paired T3 Code: ${env.label}")
+                        },
+                        onFailure = { err ->
+                            antigravityViewModel.recordWebViewBridgeEvent(err.message ?: "Invalid T3 Code pairing QR.")
+                        }
+                    )
+                } else {
+                    connectAndOpenRemoteHost(
+                        hostName = payload.hostName,
+                        url = payload.endpointUrl,
+                        token = payload.authToken
+                    )
+                }
                 showGlobalQrScanner = false
             },
             onDismiss = { showGlobalQrScanner = false }
+        )
+    }
+
+    // Dedicated T3 Code QR Pairing Scanner (preserves #token=... handshake fragments)
+    if (showT3QrScanner) {
+        QrPairingScannerDialog(
+            dialogTitle = "Scan T3 Code Pairing QR",
+            dialogSubtitle = "Connect T3 Code environment or app.t3.codes link",
+            defaultPromptMessage = "Align the T3 Code pairing QR code inside the frame",
+            onPairingScanned = { payload ->
+                val result = T3CodePinnedWebViewManager.openPairingOrCustomUrl(
+                    context = context,
+                    label = payload.hostName,
+                    rawUrl = payload.endpointUrl,
+                    saveBookmark = true
+                )
+                result.fold(
+                    onSuccess = { env ->
+                        selectedTabIndex = PulseTab.T3_CODE.ordinal
+                        antigravityViewModel.recordWebViewBridgeEvent("Paired T3 Code: ${env.label}")
+                    },
+                    onFailure = { err ->
+                        antigravityViewModel.recordWebViewBridgeEvent(err.message ?: "Invalid T3 Code pairing QR.")
+                    }
+                )
+                showT3QrScanner = false
+            },
+            onDismiss = { showT3QrScanner = false }
         )
     }
 }

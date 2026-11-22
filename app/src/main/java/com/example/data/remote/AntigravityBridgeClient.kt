@@ -301,7 +301,8 @@ object RetainedWebViewManager {
             "accounts.google.com",
             "github.com",
             "vercel.com",
-            "supabase.com"
+            "supabase.com",
+            "t3.codes"
         )
         return protectedDomains.any { domain -> host == domain || host.endsWith(".$domain") }
     }
@@ -355,6 +356,8 @@ object RetainedWebViewManager {
         if (!isSecureMediaOrigin(originUrl)) return false
         if (isHostMatchingDomain(originUrl, "aistudio.google.com", requireHttps = true)) return true
         if (isHostMatchingDomain(originUrl, "gemini.google.com", requireHttps = true)) return true
+        if (isHostMatchingDomain(originUrl, "t3.codes", requireHttps = true)) return true
+        if (T3CodePinnedWebViewManager.isTrustedActiveOrigin(originUrl)) return true
         return activeRemoteEndpoint.isNotBlank() && isSameOrigin(originUrl, activeRemoteEndpoint)
     }
 
@@ -378,9 +381,13 @@ object RetainedWebViewManager {
                 "githubusercontent.com",
                 "vercel.com",
                 "supabase.com",
-                "supabase.co"
+                "supabase.co",
+                "t3.codes"
             )
             if (trustedSuffixes.any { domain -> host == domain || host.endsWith(".$domain") }) {
+                return true
+            }
+            if (T3CodePinnedWebViewManager.isTrustedHttpsDownloadHost(host)) {
                 return true
             }
             val remoteHost = if (isSafeHttpUrl(activeRemoteEndpoint)) {

@@ -1306,4 +1306,129 @@ class ExampleRobolectricTest {
         assertEquals(Color.White, defaultLight.onAccentColor)
         assertTrue(com.example.ui.theme.contrastRatio(defaultLight.accentColor, defaultLight.surfaceColor) >= 4.8f)
     }
+
+    @Test
+    fun `T3 Code Web workspace defaults to app t3 codes, manages custom environments, preserves pairing fragments, and enforces security`() {
+        com.example.data.remote.T3CodePinnedWebViewManager.clearSensitiveBrowsingData(context)
+
+        // 1. Security allowlists: https://app.t3.codes/ is trusted HTTPS-only; cleartext http://app.t3.codes/ is blocked
+        assertTrue(RetainedWebViewManager.isSafeHttpUrl("https://app.t3.codes/"))
+        assertFalse(RetainedWebViewManager.isSafeHttpUrl("http://app.t3.codes/"))
+        assertTrue(RetainedWebViewManager.isFirstPartyTrustedMediaOrigin("https://app.t3.codes/", ""))
+        assertTrue(RetainedWebViewManager.isTrustedCookieDownloadUrl("https://app.t3.codes/export.zip", ""))
+
+        // 2. QR pairing parser handles T3 Code #token=... fragments and t3:// deep links
+        val t3FragmentQr = parseAntigravityPairingPayload("https://app.t3.codes/#token=pair_secret_99")
+        assertNotNull(t3FragmentQr)
+        assertEquals("https://app.t3.codes/#token=pair_secret_99", t3FragmentQr!!.endpointUrl)
+        assertEquals("pair_secret_99", t3FragmentQr.authToken)
+
+        val t3DeepLink = parseAntigravityPairingPayload("t3://pair?url=https%3A%2F%2Fdev.ts.net%3A3773%2F%23token%3Dabc&name=DevBox")
+        assertNotNull(t3DeepLink)
+        assertEquals("DevBox", t3DeepLink!!.hostName)
+        assertEquals("https://dev.ts.net:3773/#token=abc", t3DeepLink.endpointUrl)
+        assertEquals("abc", t3DeepLink.authToken)
+
+        // 3. Default state starts on built-in T3 Code Cloud (https://app.t3.codes/)
+        com.example.data.remote.T3CodePinnedWebViewManager.ensureEnvironmentsLoaded(context)
+        assertEquals(1, com.example.data.remote.T3CodePinnedWebViewManager.savedEnvironments.value.size)
+        assertEquals(
+            "https://app.t3.codes/",
+            com.example.data.remote.T3CodePinnedWebViewManager.activeEnvironment().baseUrl
+        )
+
+        // 4. Adding a custom self-hosted T3 environment strips secret #token=... from persisted bookmark
+        val addResult = com.example.data.remote.T3CodePinnedWebViewManager.openPairingOrCustomUrl(
+            context = context,
+            label = "Mac Studio Tailscale",
+            rawUrl = "https://mac-studio.tailnet.ts.net:3773/#token=super_secret_token",
+            saveBookmark = true
+        )
+        assertTrue(addResult.isSuccess)
+        val savedList = com.example.data.remote.T3CodePinnedWebViewManager.savedEnvironments.value
+        assertEquals(2, savedList.size)
+        val customEnv = savedList.last()
+        assertEquals("Mac Studio Tailscale", customEnv.label)
+        assertEquals("https://mac-studio.tailnet.ts.net:3773/", customEnv.baseUrl)
+        assertFalse(customEnv.baseUrl.contains("super_secret_token"))
+        assertTrue(
+            com.example.data.remote.T3CodePinnedWebViewManager.isTrustedActiveOrigin(
+                "https://mac-studio.tailnet.ts.net:3773"
+            )
+        )
+
+        // Unsafe scheme is rejected
+        val badResult = com.example.data.remote.T3CodePinnedWebViewManager.openPairingOrCustomUrl(
+            context = context,
+            label = "Evil",
+            rawUrl = "javascript:alert(1)",
+            saveBookmark = true
+        )
+        assertTrue(badResult.isFailure)
+
+        // 5. Compose UI verification: Fullscreen hides toolbar, expanded mode exposes Cloud, Environments, Desktop View, and Dialog
+        val fullscreenState = androidx.compose.runtime.mutableStateOf(true)
+        val showEnvDialogState = androidx.compose.runtime.mutableStateOf(false)
+        val boosterState = androidx.compose.runtime.mutableStateOf(true)
+        var qrClicked = false
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.screens.T3CodeWebScreen(
+                    domLagBoosterEnabled = boosterState.value,
+                    isFullscreenBarsHidden = fullscreenState.value,
+                    showEnvironmentsDialog = showEnvDialogState.value,
+                    onShowEnvironmentsDialogChange = { showEnvDialogState.value = it },
+                    onOpenT3QrScanner = { qrClicked = true },
+                    onToggleDomBooster = { boosterState.value = it },
+                    onStatusEvent = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("t3_code_web_screen").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_code_pinned_webview_container").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_code_collapsible_toolbar").assertDoesNotExist()
+        assertTrue(com.example.data.remote.T3CodePinnedWebViewManager.isPinnedInRam())
+
+        // Expand bars -> verify toolbar controls and Desktop View toggle
+        composeTestRule.runOnIdle { fullscreenState.value = false }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("t3_code_collapsible_toolbar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_code_cloud_chip").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_code_environments_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_code_qr_pair_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_code_desktop_mode_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_code_pinned_ram_badge").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("t3_code_desktop_mode_toggle").performClick()
+        composeTestRule.onNodeWithTag("t3_code_qr_pair_button").performClick()
+        composeTestRule.onNodeWithTag("t3_code_environments_button").performClick()
+        composeTestRule.waitForIdle()
+
+        assertTrue(com.example.data.remote.T3CodePinnedWebViewManager.isDesktopModeState.value)
+        assertTrue(qrClicked)
+        composeTestRule.onNodeWithTag("t3_code_environments_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_env_item_t3_cloud").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("t3_env_item_${customEnv.id}").assertIsDisplayed()
+
+        // Switching back to T3 Code Cloud closes dialog and sets active env to app.t3.codes
+        composeTestRule.onNodeWithTag("t3_env_item_t3_cloud").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(
+            com.example.data.remote.T3CodePinnedWebViewManager.T3_CLOUD_ENV_ID,
+            com.example.data.remote.T3CodePinnedWebViewManager.activeEnvironmentId.value
+        )
+
+        // 6. Offline continuity and full session wipe verification
+        com.example.data.remote.T3CodePinnedWebViewManager.onNetworkLost()
+        assertFalse(com.example.data.remote.T3CodePinnedWebViewManager.continuityState.value.isOnline)
+        com.example.data.remote.T3CodePinnedWebViewManager.onNetworkRestored(autoReloadAfterLongOutage = false)
+        assertTrue(com.example.data.remote.T3CodePinnedWebViewManager.continuityState.value.isOnline)
+
+        com.example.data.remote.T3CodePinnedWebViewManager.clearSensitiveBrowsingData(context)
+        assertEquals(1, com.example.data.remote.T3CodePinnedWebViewManager.savedEnvironments.value.size)
+        assertFalse(com.example.data.remote.T3CodePinnedWebViewManager.isDesktopModeState.value)
+    }
 }

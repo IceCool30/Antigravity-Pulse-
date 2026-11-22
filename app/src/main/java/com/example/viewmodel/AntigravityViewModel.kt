@@ -14,6 +14,7 @@ import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.BridgeConnectionState
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.T3CodePinnedWebViewManager
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -144,6 +145,7 @@ class AntigravityViewModel(
             RetainedWebViewManager.removeDomLagOptimizer()
         }
         AiStudioPinnedWebViewManager.applyLagBooster(enabled)
+        T3CodePinnedWebViewManager.applyLagBooster(enabled)
     }
 
     fun setAutoReconnectEnabled(enabled: Boolean) {

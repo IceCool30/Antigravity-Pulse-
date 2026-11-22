@@ -151,8 +151,12 @@ fun parseAntigravityPairingPayload(rawValue: String): ParsedPairingPayload? {
         }
     }
 
-    // 2. Custom deep-link scheme: antigravity://pair?url=https://...&token=...&name=...
-    if (clean.lowercase().startsWith("antigravity://")) {
+    // 2. Custom deep-link scheme: antigravity://pair?... or t3://pair?... or t3code://pair?...
+    val lowerClean = clean.lowercase()
+    if (lowerClean.startsWith("antigravity://") ||
+        lowerClean.startsWith("t3://") ||
+        lowerClean.startsWith("t3code://")
+    ) {
         return try {
             val uri = Uri.parse(clean)
             val embeddedUrl = uri.getQueryParameter("url")
@@ -161,7 +165,7 @@ fun parseAntigravityPairingPayload(rawValue: String): ParsedPairingPayload? {
             val safeUrl = sanitizeScannedEndpointUrl(embeddedUrl) ?: return null
             val token = (uri.getQueryParameter("token")
                 ?: uri.getQueryParameter("auth")
-                ?: "")
+                ?: extractFragmentToken(safeUrl))
                 .trim()
                 .take(MAX_QR_TOKEN_LENGTH)
             val name = uri.getQueryParameter("name")
@@ -179,14 +183,14 @@ fun parseAntigravityPairingPayload(rawValue: String): ParsedPairingPayload? {
         }
     }
 
-    // 3. Direct URL: https://..., http://..., wss://..., ws://... (with optional ?token=...)
+    // 3. Direct URL: https://..., http://..., wss://..., ws://... (with optional ?token=... or #token=...)
     val safeUrl = sanitizeScannedEndpointUrl(clean) ?: return null
     return try {
         val uri = Uri.parse(safeUrl)
         val token = (uri.getQueryParameter("token")
             ?: uri.getQueryParameter("code")
             ?: uri.getQueryParameter("auth")
-            ?: "")
+            ?: extractFragmentToken(safeUrl))
             .trim()
             .take(MAX_QR_TOKEN_LENGTH)
         ParsedPairingPayload(
@@ -203,6 +207,21 @@ fun parseAntigravityPairingPayload(rawValue: String): ParsedPairingPayload? {
     }
 }
 
+private fun extractFragmentToken(url: String): String {
+    return try {
+        val fragment = Uri.parse(url).fragment.orEmpty()
+        if (fragment.isBlank()) return ""
+        val parsedFragment = Uri.parse("https://placeholder.local/?$fragment")
+        (parsedFragment.getQueryParameter("token")
+            ?: parsedFragment.getQueryParameter("code")
+            ?: parsedFragment.getQueryParameter("auth")
+            ?: "")
+            .trim()
+    } catch (_: Exception) {
+        ""
+    }
+}
+
 private fun deriveHostLabelFromUrl(url: String): String {
     return try {
         val host = Uri.parse(url).host.orEmpty()
@@ -216,7 +235,10 @@ private fun deriveHostLabelFromUrl(url: String): String {
 @Composable
 fun QrPairingScannerDialog(
     onPairingScanned: (ParsedPairingPayload) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    dialogTitle: String = "Scan Antigravity QR Code",
+    dialogSubtitle: String = "Instant host URL & pairing token import",
+    defaultPromptMessage: String = "Align the Google Antigravity Remote QR code inside the frame"
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -238,7 +260,7 @@ fun QrPairingScannerDialog(
     var torchEnabled by remember { mutableStateOf(false) }
     var activeCamera by remember { mutableStateOf<Camera?>(null) }
     var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
-    var statusMessage by remember { mutableStateOf("Align the Google Antigravity Remote QR code inside the frame") }
+    var statusMessage by remember { mutableStateOf(defaultPromptMessage) }
     var pendingScannedPayload by remember { mutableStateOf<ParsedPairingPayload?>(null) }
     val scanDelivered = remember { AtomicBoolean(false) }
     val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -305,13 +327,13 @@ fun QrPairingScannerDialog(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Scan Antigravity QR Code",
+                                text = dialogTitle,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = fg
                             )
                             Text(
-                                text = "Instant host URL & pairing token import",
+                                text = dialogSubtitle,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = secondaryFg
                             )
@@ -545,7 +567,7 @@ fun QrPairingScannerDialog(
                                             onClick = {
                                                 pendingScannedPayload = null
                                                 scanDelivered.set(false)
-                                                statusMessage = "Align the Google Antigravity Remote QR code inside the frame"
+                                                statusMessage = defaultPromptMessage
                                             },
                                             modifier = Modifier
                                                 .weight(1f)
