@@ -179,8 +179,9 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
     private fun captureLatestSnapshotIfHealthy(view: WebView? = pinnedWebView) {
         val target = view ?: return
         if (mainFrameFailedInCurrentLoad) return
-        WebViewOfflineCacheHelper.runOnMainThread {
-            val captured = WebViewOfflineCacheHelper.captureWebViewSnapshot(target)
+        WebViewOfflineCacheHelper.runOnMainThread(delayMs = 1200L) {
+            if (mainFrameFailedInCurrentLoad) return@runOnMainThread
+            val captured = WebViewOfflineCacheHelper.captureVisibleSnapshotThrottled(target)
             if (captured != null) {
                 _continuityState.value = _continuityState.value.copy(cachedSnapshot = captured)
             }
@@ -350,13 +351,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
     }
 
     fun keepTimersRunning() {
-        pinnedWebView?.let { wv ->
-            try {
-                wv.onResume()
-                wv.resumeTimers()
-            } catch (_: Exception) {
-            }
-        }
+        WebViewOfflineCacheHelper.keepTimersAliveWithoutResumingHidden(pinnedWebView)
     }
 
     fun flushCookies() {

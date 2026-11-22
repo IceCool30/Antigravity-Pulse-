@@ -99,8 +99,9 @@ object RetainedWebViewManager {
     private fun captureLatestSnapshotIfHealthy(view: WebView? = pinnedWebView) {
         val target = view ?: return
         if (!hasActiveLoadedSession() || mainFrameFailedInCurrentLoad) return
-        WebViewOfflineCacheHelper.runOnMainThread {
-            val captured = WebViewOfflineCacheHelper.captureWebViewSnapshot(target)
+        WebViewOfflineCacheHelper.runOnMainThread(delayMs = 1200L) {
+            if (!hasActiveLoadedSession() || mainFrameFailedInCurrentLoad) return@runOnMainThread
+            val captured = WebViewOfflineCacheHelper.captureVisibleSnapshotThrottled(target)
             if (captured != null) {
                 _continuityState.value = _continuityState.value.copy(cachedSnapshot = captured)
             }
@@ -490,11 +491,7 @@ object RetainedWebViewManager {
      * as soon as the remote agent finishes or requests approval.
      */
     fun keepTimersRunning() {
-        try {
-            pinnedWebView?.onResume()
-            pinnedWebView?.resumeTimers()
-        } catch (_: Exception) {
-        }
+        WebViewOfflineCacheHelper.keepTimersAliveWithoutResumingHidden(pinnedWebView)
     }
 
     fun dispatchKeepAliveHeartbeat() {
@@ -1130,13 +1127,19 @@ object RetainedWebViewManager {
                   var isWorking = false;
                   var workStartedAt = 0;
                   var lastActivityAt = 0;
-                  var lastTextLen = (document.body.innerText || '').length;
+                  var lastTextLen = (document.body.textContent || '').length;
                   var streamTicks = 0;
                   var lastStreamTickAt = 0;
                   var seenApprovalKeys = {};
                   var baselineCaptured = false;
                   var lastWorkedMarkerCount = 0;
                   var domDirty = true;
+                  var lastUserTouchAt = 0;
+                  try {
+                    var markTouch = function() { lastUserTouchAt = Date.now(); };
+                    window.addEventListener('touchstart', markTouch, { passive: true, capture: true });
+                    window.addEventListener('scroll', markTouch, { passive: true, capture: true });
+                  } catch (e) {}
 
                   function isVisible(el) {
                     if (!el || !el.getBoundingClientRect) { return false; }
@@ -1218,13 +1221,19 @@ object RetainedWebViewManager {
                         return;
                       }
 
+                      // Never run DOM scans while the user is actively touching or scrolling
+                      if ((now - lastUserTouchAt) < 1200) {
+                        domDirty = true;
+                        return;
+                      }
                       // Zero-CPU idle fast path: skip DOM scans when nothing changed and agent is idle
                       if (fromTimer && !domDirty && !isWorking && baselineCaptured) {
                         return;
                       }
                       domDirty = false;
 
-                      var bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
+                      // Use textContent instead of innerText to avoid synchronous Blink layout reflows
+                      var bodyText = (document.body && document.body.textContent) ? document.body.textContent : '';
                       var textLen = bodyText.length;
                       var workedCount = countWorkedMarkers(bodyText);
 

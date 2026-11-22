@@ -1587,5 +1587,29 @@ class ExampleRobolectricTest {
         composeTestRule.waitForIdle()
         assertEquals(1, batterySettingsClicks)
     }
+
+    @Test
+    fun `applyWindowAttachedVisibility switches inactive WebViews to View GONE and active to VISIBLE for lag-free touch`() {
+        val webView = android.webkit.WebView(context)
+        com.example.data.remote.WebViewOfflineCacheHelper.applyWindowAttachedVisibility(webView, isActive = false)
+        assertEquals(android.view.View.GONE, webView.visibility)
+        assertFalse(webView.isEnabled)
+        assertFalse(webView.isFocusable)
+
+        // Snapshotting a hidden View.GONE WebView is skipped immediately (zero UI-thread draw stall)
+        assertNull(com.example.data.remote.WebViewOfflineCacheHelper.captureVisibleSnapshotThrottled(webView))
+
+        // Activating restores VISIBLE + touch/focus cleanly
+        com.example.data.remote.WebViewOfflineCacheHelper.applyWindowAttachedVisibility(webView, isActive = true)
+        assertEquals(android.view.View.VISIBLE, webView.visibility)
+        assertTrue(webView.isEnabled)
+        assertTrue(webView.isFocusable)
+
+        // Keeping timers alive runs safely without throwing on both visible and hidden WebViews
+        com.example.data.remote.WebViewOfflineCacheHelper.keepTimersAliveWithoutResumingHidden(webView)
+        com.example.data.remote.WebViewOfflineCacheHelper.applyWindowAttachedVisibility(webView, isActive = false)
+        com.example.data.remote.WebViewOfflineCacheHelper.keepTimersAliveWithoutResumingHidden(webView)
+        assertEquals(android.view.View.GONE, webView.visibility)
+    }
 }
 

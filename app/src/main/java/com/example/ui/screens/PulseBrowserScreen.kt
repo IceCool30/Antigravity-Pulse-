@@ -397,7 +397,6 @@ fun PulseBrowserScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .zIndex(if (isTabActive) 1f else 0f)
-                            .graphicsLayer { alpha = if (isTabActive) 1f else 0f }
                             .then(
                                 if (isTabActive) Modifier else Modifier.clearAndSetSemantics {}
                             )
@@ -416,9 +415,6 @@ fun PulseBrowserScreen(
                             },
                             update = { wv ->
                                 WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, shouldBeVisible)
-                                if (isTabActive) {
-                                    PulseBrowserManager.applyLagBooster(tab.id, domLagBoosterEnabled)
-                                }
                             }
                         )
                     }
@@ -446,7 +442,7 @@ fun PulseBrowserScreen(
                         }
                     )
                 }
-            } else {
+            } else if (isWorkspaceActive) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()

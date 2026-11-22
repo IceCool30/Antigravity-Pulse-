@@ -74,8 +74,9 @@ object AiStudioPinnedWebViewManager {
     private fun captureLatestSnapshotIfHealthy(view: WebView? = pinnedAiStudioWebView) {
         val target = view ?: return
         if (mainFrameFailedInCurrentLoad) return
-        WebViewOfflineCacheHelper.runOnMainThread {
-            val captured = WebViewOfflineCacheHelper.captureWebViewSnapshot(target)
+        WebViewOfflineCacheHelper.runOnMainThread(delayMs = 1200L) {
+            if (mainFrameFailedInCurrentLoad) return@runOnMainThread
+            val captured = WebViewOfflineCacheHelper.captureVisibleSnapshotThrottled(target)
             if (captured != null) {
                 _continuityState.value = _continuityState.value.copy(cachedSnapshot = captured)
             }
@@ -221,11 +222,7 @@ object AiStudioPinnedWebViewManager {
     }
 
     fun keepTimersRunning() {
-        try {
-            pinnedAiStudioWebView?.onResume()
-            pinnedAiStudioWebView?.resumeTimers()
-        } catch (_: Exception) {
-        }
+        WebViewOfflineCacheHelper.keepTimersAliveWithoutResumingHidden(pinnedAiStudioWebView)
     }
 
     fun dispatchKeepAliveHeartbeat() {

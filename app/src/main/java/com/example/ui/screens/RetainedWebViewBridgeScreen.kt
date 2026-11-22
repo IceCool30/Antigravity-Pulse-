@@ -289,17 +289,19 @@ fun RetainedWebViewBridgeScreen(
                 }
 
                 // Offline visual snapshot cache & frosted reconnect pill (active only on live sessions)
-                OfflineContinuityOverlay(
-                    continuity = continuity,
-                    workspaceLabel = "Antigravity Remote",
-                    onRetryOrReloadLatest = {
-                        RetainedWebViewManager.refreshWithSnapshotShield()
-                        onJsBridgeEvent("Refreshing Antigravity Remote to latest state...")
-                    },
-                    onDismissRestoredBanner = {
-                        RetainedWebViewManager.dismissRestoredBanner()
-                    }
-                )
+                if (isWorkspaceActive) {
+                    OfflineContinuityOverlay(
+                        continuity = continuity,
+                        workspaceLabel = "Antigravity Remote",
+                        onRetryOrReloadLatest = {
+                            RetainedWebViewManager.refreshWithSnapshotShield()
+                            onJsBridgeEvent("Refreshing Antigravity Remote to latest state...")
+                        },
+                        onDismissRestoredBanner = {
+                            RetainedWebViewManager.dismissRestoredBanner()
+                        }
+                    )
+                }
             }
 
             // Native Welcome Guide with direct Antigravity Remote, T3 Code Web & Google AI Studio launch buttons

@@ -135,21 +135,33 @@ object WorkspaceMemoryKeepAliveCoordinator {
 
     /**
      * Keeps all currently pinned WebViews' JS timers, WebSockets, and cookie jars alive
-     * without triggering page reloads or heavy layout passes.
+     * without triggering page reloads, waking hidden GPU compositors, or bunching IPCs
+     * onto a single UI frame.
      */
     fun runKeepAliveHeartbeatAll() {
+        val tasks = mutableListOf<() -> Unit>()
         if (RetainedWebViewManager.isPinnedInRam()) {
-            RetainedWebViewManager.dispatchKeepAliveHeartbeat()
+            tasks += { RetainedWebViewManager.dispatchKeepAliveHeartbeat() }
         }
         if (T3CodePinnedWebViewManager.isPinnedInRam()) {
-            T3CodePinnedWebViewManager.dispatchKeepAliveHeartbeat()
+            tasks += { T3CodePinnedWebViewManager.dispatchKeepAliveHeartbeat() }
         }
         if (AiStudioPinnedWebViewManager.isPinnedInRam()) {
-            AiStudioPinnedWebViewManager.dispatchKeepAliveHeartbeat()
+            tasks += { AiStudioPinnedWebViewManager.dispatchKeepAliveHeartbeat() }
         }
-        DevWebWorkspaceRegistry.dispatchKeepAliveHeartbeatAll()
+        DevWebWorkspace.entries.forEach { ws ->
+            val session = DevWebWorkspaceRegistry.session(ws)
+            if (session.isPinnedInRam()) {
+                tasks += { session.dispatchKeepAliveHeartbeat() }
+            }
+        }
         if (PulseBrowserManager.isPinnedInRam()) {
-            PulseBrowserManager.dispatchKeepAliveHeartbeatAll()
+            tasks += { PulseBrowserManager.dispatchKeepAliveHeartbeatAll() }
+        }
+        tasks.forEachIndexed { index, task ->
+            WebViewOfflineCacheHelper.runOnMainThread(delayMs = index * 160L) {
+                task()
+            }
         }
         _lastHeartbeatElapsedMs.value = SystemClock.elapsedRealtime()
         notifyWorkspaceTopologyChanged()

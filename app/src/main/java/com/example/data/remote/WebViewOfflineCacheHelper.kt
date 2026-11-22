@@ -46,8 +46,11 @@ data class WebViewStateBackup(
  * so temporary internet drops never replace the user's live interface with a blank error screen.
  */
 object WebViewOfflineCacheHelper {
-    private const val MAX_SNAPSHOT_DIMENSION_PX = 1440
+    private const val MAX_SNAPSHOT_DIMENSION_PX = 720
+    private const val PERIODIC_SNAPSHOT_MIN_INTERVAL_MS = 30_000L
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val activeRenderStateMap = java.util.WeakHashMap<WebView, Boolean>()
+    private val lastSnapshotElapsedMap = java.util.WeakHashMap<WebView, Long>()
 
     /**
      * Runs [block] on the Android main thread immediately if already on it (and [delayMs] == 0),
@@ -131,6 +134,7 @@ object WebViewOfflineCacheHelper {
      */
     fun captureWebViewSnapshot(webView: WebView?): Bitmap? {
         val target = webView ?: return null
+        if (target.visibility != View.VISIBLE) return null
         val currentUrl = try {
             target.url.orEmpty()
         } catch (_: Exception) {
@@ -166,12 +170,32 @@ object WebViewOfflineCacheHelper {
             // Translate by current scroll offset so the snapshot captures the exact visible viewport
             canvas.translate(-target.scrollX.toFloat(), -target.scrollY.toFloat())
             target.draw(canvas)
+            synchronized(lastSnapshotElapsedMap) {
+                lastSnapshotElapsedMap[target] = android.os.SystemClock.elapsedRealtime()
+            }
             bitmap
         } catch (_: OutOfMemoryError) {
             null
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * Throttled snapshot capture for routine `onPageFinished` callbacks so rapid SPA navigations
+     * never stall touch input with repeated synchronous software draws on the UI thread.
+     */
+    fun captureVisibleSnapshotThrottled(webView: WebView?): Bitmap? {
+        val target = webView ?: return null
+        if (target.visibility != View.VISIBLE) return null
+        val now = android.os.SystemClock.elapsedRealtime()
+        val lastAt = synchronized(lastSnapshotElapsedMap) {
+            lastSnapshotElapsedMap[target] ?: 0L
+        }
+        if (lastAt > 0L && (now - lastAt) < PERIODIC_SNAPSHOT_MIN_INTERVAL_MS) {
+            return null
+        }
+        return captureWebViewSnapshot(target)
     }
 
     /**
@@ -208,14 +232,17 @@ object WebViewOfflineCacheHelper {
     }
 
     /**
-     * Toggles a Window-attached WebView between active foreground and hidden RAM-pinned state
-     * WITHOUT ever detaching it from the Window (`removeView`), preventing `onDetachedFromWindow`
-     * tear-downs, WebSocket drops, and Chromium compositor reloads while strictly blocking
-     * stray touches, focus, and IME keyboard input on hidden tabs.
+     * Toggles a Window-attached WebView between active foreground (`View.VISIBLE` + `onResume`)
+     * and hidden RAM-pinned state (`View.GONE` + per-instance `onPause` WITHOUT `pauseTimers`)
+     * so:
+     * 1. The WebView stays permanently attached to the Window (`isAttachedToWindow == true`),
+     *    preserving its entire DOM, JS heap, scroll position, and WebSockets with zero reloads.
+     * 2. Hidden tabs consume zero GPU compositor/rAF cycles and are completely excluded from
+     *    Android ViewGroup touch hit-testing and drawing—keeping foreground touch instant at 120Hz.
      */
     fun applyWindowAttachedVisibility(webView: WebView, isActive: Boolean) {
         try {
-            val targetVisibility = if (isActive) View.VISIBLE else View.INVISIBLE
+            val targetVisibility = if (isActive) View.VISIBLE else View.GONE
             if (webView.visibility != targetVisibility) {
                 webView.visibility = targetVisibility
             }
@@ -239,6 +266,39 @@ object WebViewOfflineCacheHelper {
             if (!isActive && webView.hasFocus()) {
                 webView.clearFocus()
             }
+
+            val previousState = synchronized(activeRenderStateMap) {
+                val prev = activeRenderStateMap[webView]
+                activeRenderStateMap[webView] = isActive
+                prev
+            }
+            if (previousState != isActive) {
+                if (isActive) {
+                    webView.onResume()
+                    webView.resumeTimers()
+                } else {
+                    // Pause ONLY this hidden WebView's GPU rendering/rAF animations so it never
+                    // competes with the active workspace for UI/RenderThread frames. Never call
+                    // pauseTimers(), which is global across all WebViews.
+                    webView.onPause()
+                    webView.resumeTimers()
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Keeps JS timers running across all WebViews during Activity lifecycle transitions without
+     * waking up GPU/rAF rendering on hidden (`View.GONE`) background tabs.
+     */
+    fun keepTimersAliveWithoutResumingHidden(webView: WebView?) {
+        val target = webView ?: return
+        try {
+            if (target.visibility == View.VISIBLE) {
+                target.onResume()
+            }
+            target.resumeTimers()
         } catch (_: Exception) {
         }
     }
@@ -312,13 +372,13 @@ object WebViewOfflineCacheHelper {
 
     /**
      * Lightweight, zero-reload periodic heartbeat that keeps Chromium's JS timers and V8 isolate
-     * warm for hidden pinned tabs so SPAs remain responsive after 1+ hour in RAM.
+     * warm for hidden pinned tabs WITHOUT waking up hidden GPU/rAF compositors (`onResume`), so
+     * foreground scrolling and touch response remain completely lag-free.
      */
     fun dispatchKeepAliveHeartbeat(webView: WebView?) {
         val target = webView ?: return
         runOnMainThread {
             try {
-                target.onResume()
                 target.resumeTimers()
                 val liveUrl = target.url.orEmpty()
                 if (liveUrl.isNotBlank() && RetainedWebViewManager.isSafeHttpUrl(liveUrl)) {

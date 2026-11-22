@@ -294,7 +294,6 @@ class MainActivity : FragmentActivity() {
 
     override fun onPause() {
         PulseNotificationManager.isAppInForeground = false
-        WorkspaceMemoryKeepAliveCoordinator.saveAllStateBackups()
         RetainedWebViewManager.keepTimersRunning()
         AiStudioPinnedWebViewManager.keepTimersRunning()
         T3CodePinnedWebViewManager.keepTimersRunning()
@@ -2256,9 +2255,12 @@ fun AntigravityPulseApp(
 
 /**
  * Window-attached workspace slot that keeps an opened WebView permanently mounted in the
- * Android View hierarchy while switching tabs. Inactive slots drop immediately to `zIndex(0f)`
- * with `alpha = 0f` and cleared accessibility semantics; the newly active slot performs a
- * lightweight GPU-only fade-in without ever changing WebView layout bounds or triggering reloads.
+ * Android View hierarchy while switching tabs.
+ *
+ * Intentionally avoids `Modifier.graphicsLayer { alpha = ... }` around live `AndroidView(WebView)`
+ * nodes so Chromium renders directly without an offscreen hardware FBO copy or touch-dispatch lag.
+ * Inactive slots drop to `zIndex(0f)` with `View.GONE` + per-instance `onPause()` (never pausing
+ * global timers), giving instant 0ms tab switching and zero background GPU contention.
  */
 @Composable
 private fun KeepAliveWorkspaceSlot(
@@ -2266,18 +2268,12 @@ private fun KeepAliveWorkspaceSlot(
     smoothAnimationsEnabled: Boolean,
     content: @Composable () -> Unit
 ) {
-    val slotAlpha by animateFloatAsState(
-        targetValue = if (isActive) 1f else 0f,
-        animationSpec = tween(
-            durationMillis = if (smoothAnimationsEnabled && isActive) 130 else 0
-        ),
-        label = "workspace_slot_alpha"
-    )
+    @Suppress("UNUSED_VARIABLE")
+    val unusedAnimationsFlag = smoothAnimationsEnabled
     Box(
         modifier = Modifier
             .fillMaxSize()
             .zIndex(if (isActive) 1f else 0f)
-            .graphicsLayer { alpha = slotAlpha }
             .then(if (isActive) Modifier else Modifier.clearAndSetSemantics {})
     ) {
         content()

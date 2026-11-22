@@ -319,8 +319,9 @@ object PulseBrowserManager {
     private fun captureSnapshotIfHealthy(tabId: String, view: WebView?) {
         val target = view ?: return
         if (tabMainFrameFailed[tabId] == true) return
-        WebViewOfflineCacheHelper.runOnMainThread {
-            val captured = WebViewOfflineCacheHelper.captureWebViewSnapshot(target)
+        WebViewOfflineCacheHelper.runOnMainThread(delayMs = 1200L) {
+            if (tabMainFrameFailed[tabId] == true) return@runOnMainThread
+            val captured = WebViewOfflineCacheHelper.captureVisibleSnapshotThrottled(target)
             if (captured != null) {
                 updateTab(tabId) {
                     it.copy(continuityState = it.continuityState.copy(cachedSnapshot = captured))
@@ -425,11 +426,7 @@ object PulseBrowserManager {
 
     fun keepTimersRunningAll() {
         tabWebViews.values.forEach { wv ->
-            try {
-                wv.onResume()
-                wv.resumeTimers()
-            } catch (_: Exception) {
-            }
+            WebViewOfflineCacheHelper.keepTimersAliveWithoutResumingHidden(wv)
         }
     }
 

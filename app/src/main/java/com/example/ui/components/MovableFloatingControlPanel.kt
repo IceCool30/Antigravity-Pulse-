@@ -12,6 +12,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -77,10 +79,15 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -244,23 +251,52 @@ fun MovableFloatingControlPanel(
                         tintAlpha = 0.10f,
                         borderAlpha = if (isLightMode) 0.78f else 0.55f
                     )
-                    .pointerInput(maxHandleX, maxHandleY) {
-                        detectDragGestures(
-                            onDragEnd = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                persistCurrentFractions()
-                            },
-                            onDragCancel = { persistCurrentFractions() },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                handleX = (handleX + dragAmount.x).coerceIn(0f, maxHandleX)
-                                handleY = (handleY + dragAmount.y).coerceIn(0f, maxHandleY)
-                            }
-                        )
+                    .semantics(mergeDescendants = true) {
+                        role = Role.Button
+                        onClick(label = "Open Movable Side Panel Controls") {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onExpandedChange(true)
+                            true
+                        }
                     }
-                    .clickable {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onExpandedChange(true)
+                    .pointerInput(maxHandleX, maxHandleY) {
+                        val slop = viewConfiguration.touchSlop
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var dragged = false
+                            var accumX = 0f
+                            var accumY = 0f
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    change.consume()
+                                    if (dragged) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        persistCurrentFractions()
+                                    } else {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onExpandedChange(true)
+                                    }
+                                    break
+                                }
+                                val delta = change.positionChange()
+                                if (!dragged) {
+                                    accumX += delta.x
+                                    accumY += delta.y
+                                    if (accumX * accumX + accumY * accumY > slop * slop) {
+                                        dragged = true
+                                        handleX = (handleX + accumX).coerceIn(0f, maxHandleX)
+                                        handleY = (handleY + accumY).coerceIn(0f, maxHandleY)
+                                        change.consume()
+                                    }
+                                } else if (delta.x != 0f || delta.y != 0f) {
+                                    handleX = (handleX + delta.x).coerceIn(0f, maxHandleX)
+                                    handleY = (handleY + delta.y).coerceIn(0f, maxHandleY)
+                                    change.consume()
+                                }
+                            }
+                        }
                     }
                     .padding(horizontal = 5.dp, vertical = 9.dp)
                     .testTag("floating_fullscreen_edge_handle"),

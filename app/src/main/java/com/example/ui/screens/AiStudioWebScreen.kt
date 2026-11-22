@@ -287,17 +287,19 @@ fun AiStudioWebScreen(
                 )
             }
 
-            OfflineContinuityOverlay(
-                continuity = continuity,
-                workspaceLabel = "Google AI Studio",
-                onRetryOrReloadLatest = {
-                    AiStudioPinnedWebViewManager.refreshWithSnapshotShield()
-                    onStatusEvent("Refreshing AI Studio to latest state...")
-                },
-                onDismissRestoredBanner = {
-                    AiStudioPinnedWebViewManager.dismissRestoredBanner()
-                }
-            )
+            if (isWorkspaceActive) {
+                OfflineContinuityOverlay(
+                    continuity = continuity,
+                    workspaceLabel = "Google AI Studio",
+                    onRetryOrReloadLatest = {
+                        AiStudioPinnedWebViewManager.refreshWithSnapshotShield()
+                        onStatusEvent("Refreshing AI Studio to latest state...")
+                    },
+                    onDismissRestoredBanner = {
+                        AiStudioPinnedWebViewManager.dismissRestoredBanner()
+                    }
+                )
+            }
         }
     }
 }

@@ -333,17 +333,18 @@ fun PinnedWebWorkspaceScreen(
                     },
                     update = { wv ->
                         WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                        session.applyLagBooster(domLagBoosterEnabled)
                     }
                 )
             }
 
-            OfflineContinuityOverlay(
-                continuity = continuity,
-                workspaceLabel = workspace.displayName,
-                onRetryOrReloadLatest = { session.reloadOrRetryLatest() },
-                onDismissRestoredBanner = { session.dismissRestoredBanner() }
-            )
+            if (isWorkspaceActive) {
+                OfflineContinuityOverlay(
+                    continuity = continuity,
+                    workspaceLabel = workspace.displayName,
+                    onRetryOrReloadLatest = { session.reloadOrRetryLatest() },
+                    onDismissRestoredBanner = { session.dismissRestoredBanner() }
+                )
+            }
         }
     }
 }

@@ -453,17 +453,18 @@ fun T3CodeWebScreen(
                     },
                     update = { wv ->
                         WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                        T3CodePinnedWebViewManager.applyLagBooster(domLagBoosterEnabled)
                     }
                 )
             }
 
-            OfflineContinuityOverlay(
-                continuity = continuity,
-                workspaceLabel = "T3 Code",
-                onRetryOrReloadLatest = { T3CodePinnedWebViewManager.reloadOrRetryLatest() },
-                onDismissRestoredBanner = { T3CodePinnedWebViewManager.dismissRestoredBanner() }
-            )
+            if (isWorkspaceActive) {
+                OfflineContinuityOverlay(
+                    continuity = continuity,
+                    workspaceLabel = "T3 Code",
+                    onRetryOrReloadLatest = { T3CodePinnedWebViewManager.reloadOrRetryLatest() },
+                    onDismissRestoredBanner = { T3CodePinnedWebViewManager.dismissRestoredBanner() }
+                )
+            }
         }
     }
 
