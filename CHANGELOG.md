@@ -4,6 +4,24 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-11-23
+
+### Fixed & Optimized
+- **Instant Touch & 60/120Hz Input Responsiveness**:
+  - Inactive RAM-pinned workspaces now switch to `View.GONE` with a per-instance `onPause()` — never calling global `pauseTimers()` — so background WebViews stop consuming GPU and UI thread time while full 1+ hour zero-reload retention is preserved.
+  - Staggered keep-alive heartbeats at 160 ms intervals avoid synchronized wake-ups across workspaces.
+- **Direct Hardware WebView Compositing**:
+  - Removed offscreen `graphicsLayer { alpha = ... }` wrappers from live `AndroidView(WebView)` workspace slots and multi-tab Pulse Browser containers, so Chromium composites directly without costly offscreen copies or touch-dispatch lag.
+  - Guarded inactive offline continuity overlays so hidden workviews never repaint needlessly.
+  - Explicitly declared `android:hardwareAccelerated="true"` in the manifest.
+- **Eliminated Recomposition & Main-Thread Stalls**:
+  - Removed redundant Lag Booster JavaScript re-injection inside `AndroidView(update)`.
+  - Reduced and deferred routine offline snapshot captures: 720 px max dimension, 1200 ms delay, and a 30-second throttle.
+  - Remote DOM notification scanning now uses layout-reflow-free `textContent` instead of `innerText`, with a touch/scroll cooldown.
+  - Removed duplicate `onPause` state serialization.
+- **Crisp Movable Floating Handle**:
+  - Unified tap-and-drag gesture handling on the side edge handle so taps open instantly and drags track 1:1 without getting stuck.
+
 ## [1.2.0] - 2026-11-22
 
 ### Added

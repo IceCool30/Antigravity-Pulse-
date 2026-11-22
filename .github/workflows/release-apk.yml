@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release version tag (e.g. v1.2.0)"
+        description: "Release version tag (e.g. v1.2.1)"
         required: false
-        default: "v1.2.0"
+        default: "v1.2.1"
 
 permissions:
   contents: write
@@ -65,7 +65,7 @@ jobs:
           HAS_RELEASE_KEYSTORE: ${{ (secrets.ANDROID_KEYSTORE_BASE64 != '' || secrets.KEYSTORE_BASE64 != '') && secrets.STORE_PASSWORD != '' && secrets.KEY_PASSWORD != '' }}
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            TAG="${RELEASE_TAG_INPUT:-v1.2.0}"
+            TAG="${RELEASE_TAG_INPUT:-v1.2.1}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
