@@ -3,6 +3,10 @@
 **Antigravity Pulse v1.2.2** adds in-app self-updating and unifies the app icon with the desktop
 release. It upgrades cleanly in place over v1.2.1 with no uninstall and no data loss.
 
+> **Build correction:** the first v1.2.2 upload was missing `google-services.json`, which caused a
+> startup crash. The APK on this release has been rebuilt with the Firebase configuration restored
+> and verified launching on a physical device. If you downloaded the earlier APK, reinstall this one.
+
 ## What's New in v1.2.2
 
 - **In-app updates.** Settings now has an Updates section with a manual check, release notes,
