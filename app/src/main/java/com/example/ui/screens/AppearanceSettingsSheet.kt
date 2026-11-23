@@ -603,6 +603,18 @@ fun AppearanceSettingsSheet(
                         isFrostedGlass = isFrostedGlass
                     )
                 }
+
+                // SECTION 6: App Updates (GitHub Releases check, download & verified install)
+                item(key = "section_updates") {
+                    UpdateSettingsSection(
+                        surface = surface,
+                        border = border,
+                        fg = fg,
+                        secondaryFg = secondaryFg,
+                        accent = accent,
+                        isFrostedGlass = isFrostedGlass
+                    )
+                }
             }
         }
     }

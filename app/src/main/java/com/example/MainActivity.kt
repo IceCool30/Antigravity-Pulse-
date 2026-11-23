@@ -147,6 +147,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.BuildConfig
 import com.example.data.cloud.authStateFlow
 import com.example.data.cloud.clearFirestoreLocalCache
 import com.example.data.cloud.configureAppCheck
@@ -164,6 +165,7 @@ import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator
 import com.example.notifications.PulseNotificationManager
 import com.example.service.WorkspaceKeepAliveService
+import com.example.updater.UpdateChecker
 import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
 import com.example.ui.screens.AiStudioWebScreen
@@ -181,6 +183,10 @@ import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
 import com.example.viewmodel.AntigravityViewModel
+
+private const val AUTO_UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
+private const val UPDATE_CHECK_PREFS_NAME = "update_checker_prefs"
+private const val KEY_LAST_UPDATE_CHECK_MS = "last_update_check_ms"
 
 class MainActivity : FragmentActivity() {
     companion object {
@@ -1030,6 +1036,29 @@ fun AntigravityPulseApp(
         ) {
             hasPromptedNotificationPermission = true
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Silent daily background auto-update check (24h throttle via SharedPreferences). Never shows
+    // a blocking dialog on startup; only posts an update notification while the app is backgrounded.
+    LaunchedEffect(Unit) {
+        val updatePrefs = context.getSharedPreferences(UPDATE_CHECK_PREFS_NAME, Context.MODE_PRIVATE)
+        val lastCheckMs = updatePrefs.getLong(KEY_LAST_UPDATE_CHECK_MS, 0L)
+        val isAutoCheckDue = System.currentTimeMillis() - lastCheckMs >= AUTO_UPDATE_CHECK_INTERVAL_MS
+        if (!isAutoCheckDue) return@LaunchedEffect
+        try {
+            val latestRelease = UpdateChecker.checkForUpdate(context)
+            updatePrefs.edit().putLong(KEY_LAST_UPDATE_CHECK_MS, System.currentTimeMillis()).apply()
+            if (latestRelease != null && UpdateChecker.isNewer(latestRelease.tagName, BuildConfig.VERSION_NAME)) {
+                if (!PulseNotificationManager.isAppInForeground) {
+                    PulseNotificationManager.showAppActivityNotification(
+                        context = context,
+                        title = "Update Available",
+                        body = "Antigravity Pulse ${latestRelease.versionName} is ready to install. Tap to review the release."
+                    )
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 
