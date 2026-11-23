@@ -1,11 +1,11 @@
 {
-  "tagName": "v1.2.2",
-  "versionName": "1.2.2",
-  "publishedAt": "2026-11-23T19:15:00Z",
-  "releaseNotes": "In-app updates, SHA-256 verified installs, daily update notifications, and the shared orbit icon. Performance: update checks run off the UI thread. Build correction: Firebase config restored.",
-  "apkUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.2/Antigravity-Pulse-v1.2.2.apk",
+  "tagName": "v1.2.3",
+  "versionName": "1.2.3",
+  "publishedAt": "2026-11-23T20:45:00Z",
+  "releaseNotes": "Hardware-accelerated 60/120Hz smooth scrolling across all 8 web workspaces. Restored GPU compositor root scrolling, removed font-shaping text stalls and layout reflows, enabled tile pre-rasterization, and restored native fling physics.",
+  "apkUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.3/Antigravity-Pulse-v1.2.3.apk",
   "apkSizeBytes": 41958541,
-  "sha256": "af2f2f27a1ea900b20848ab83d11caa7970565d45af764b78f59a59e1baab149",
-  "sha256SumsUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.2/SHA256SUMS.txt",
-  "releaseNotesUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.2"
+  "sha256": "3c5caae6caf62fdae3d0e288c36c4db41bef96619296377a5daac5c575162cfa",
+  "sha256SumsUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.3/SHA256SUMS.txt",
+  "releaseNotesUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.3"
 }

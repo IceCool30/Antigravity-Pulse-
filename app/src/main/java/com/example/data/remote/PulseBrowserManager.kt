@@ -488,8 +488,8 @@ object PulseBrowserManager {
               }
               if (style) {
                 style.textContent =
-                  'html, body { scroll-behavior: auto !important; -webkit-tap-highlight-color: transparent !important; } ' +
-                  'a, button, input, textarea, [role="button"] { touch-action: manipulation !important; }';
+                  'html, body { -webkit-tap-highlight-color: transparent !important; ' +
+                  'touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; }';
               }
             })();
             """.trimIndent()
@@ -569,8 +569,11 @@ object PulseBrowserManager {
             )
             setBackgroundColor(android.graphics.Color.BLACK)
             setLayerType(View.LAYER_TYPE_NONE, null)
+            isNestedScrollingEnabled = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+            isVerticalScrollBarEnabled = true
             isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
@@ -597,6 +600,9 @@ object PulseBrowserManager {
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     safeBrowsingEnabled = true
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    offscreenPreRaster = true
                 }
                 layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
                 textZoom = 100

@@ -203,6 +203,26 @@ class MainActivity : FragmentActivity() {
         configureAppCheck(this, intent)
         PulseNotificationManager.ensureChannelsCreated(this)
 
+        window.addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val currentDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    display
+                } else {
+                    @Suppress("DEPRECATION")
+                    windowManager.defaultDisplay
+                }
+                val modes = currentDisplay?.supportedModes
+                val maxRefreshMode = modes?.maxByOrNull { it.refreshRate }
+                if (maxRefreshMode != null && maxRefreshMode.refreshRate > 60f) {
+                    val params = window.attributes
+                    params.preferredDisplayModeId = maxRefreshMode.modeId
+                    window.attributes = params
+                }
+            } catch (_: Exception) {
+            }
+        }
+
         // Apply FLAG_SECURE synchronously before the first frame renders so Recents/screenshots cannot capture pre-lock UI
         val initialAppearanceManager = AppearancePreferencesManager(this)
         if (initialAppearanceManager.settings.value.isBiometricLockEnabled) {

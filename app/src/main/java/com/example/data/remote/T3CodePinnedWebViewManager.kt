@@ -629,8 +629,8 @@ object T3CodePinnedWebViewManager {
               }
               if (style) {
                 style.textContent =
-                  'html, body { -webkit-tap-highlight-color: transparent !important; } ' +
-                  'a, button, input, textarea, [role="button"] { touch-action: manipulation !important; }';
+                  'html, body { -webkit-tap-highlight-color: transparent !important; ' +
+                  'touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; }';
               }
             })();
             """.trimIndent()
@@ -727,6 +727,13 @@ object T3CodePinnedWebViewManager {
             )
             setBackgroundColor(android.graphics.Color.BLACK)
             setLayerType(View.LAYER_TYPE_NONE, null)
+            isNestedScrollingEnabled = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+            isVerticalScrollBarEnabled = true
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                settings.offscreenPreRaster = true
+            }
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -745,6 +752,9 @@ object T3CodePinnedWebViewManager {
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     safeBrowsingEnabled = true
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    offscreenPreRaster = true
                 }
                 useWideViewPort = true
                 loadWithOverviewMode = false
@@ -872,7 +882,10 @@ object T3CodePinnedWebViewManager {
             )
             setBackgroundColor(android.graphics.Color.BLACK)
             setLayerType(View.LAYER_TYPE_NONE, null)
-            overScrollMode = View.OVER_SCROLL_NEVER
+            isNestedScrollingEnabled = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+            isVerticalScrollBarEnabled = true
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
@@ -902,6 +915,9 @@ object T3CodePinnedWebViewManager {
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     safeBrowsingEnabled = true
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    offscreenPreRaster = true
                 }
                 layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
                 textZoom = 100

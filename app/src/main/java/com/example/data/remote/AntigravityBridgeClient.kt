@@ -555,8 +555,11 @@ object RetainedWebViewManager {
             // Use default window layer pipeline (LAYER_TYPE_NONE) instead of forcing an offscreen
             // hardware FBO layer, preventing DRM rendernode errors on software-rendered environments.
             setLayerType(View.LAYER_TYPE_NONE, null)
+            isNestedScrollingEnabled = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+            isVerticalScrollBarEnabled = true
             isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
@@ -586,6 +589,9 @@ object RetainedWebViewManager {
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     safeBrowsingEnabled = true
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    offscreenPreRaster = true
                 }
                 useWideViewPort = true
                 loadWithOverviewMode = false
@@ -952,13 +958,12 @@ object RetainedWebViewManager {
             (function() {
               try {
                 var vp = document.querySelector('meta[name="viewport"]');
-                var vpContent = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
                 if (!vp && document.head) {
                   vp = document.createElement('meta');
                   vp.name = 'viewport';
+                  vp.setAttribute('content', 'width=device-width, initial-scale=1.0, viewport-fit=cover');
                   document.head.appendChild(vp);
                 }
-                if (vp) { vp.setAttribute('content', vpContent); }
 
                 var styleId = 'antigravity-pulse-layout-fix';
                 var existing = document.getElementById(styleId);
@@ -966,17 +971,11 @@ object RetainedWebViewManager {
                   existing = document.createElement('style');
                   existing.id = styleId;
                   existing.textContent =
-                    'html, body { width: 100% !important; max-width: 100vw !important; min-width: 0 !important; ' +
-                    'overflow-x: hidden !important; margin-left: 0 !important; margin-right: 0 !important; ' +
-                    'padding-left: 0 !important; padding-right: 0 !important; box-sizing: border-box !important; ' +
-                    '-webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; } ' +
-                    '#root, #app, main, [role="main"] { max-width: 100vw !important; box-sizing: border-box !important; }';
+                    'html, body { width: 100%; min-width: 0; margin-left: 0; margin-right: 0; ' +
+                    'padding-left: 0; padding-right: 0; box-sizing: border-box; ' +
+                    '-webkit-font-smoothing: antialiased; text-rendering: auto; }';
                   document.head.appendChild(existing);
                 }
-
-                window.scrollTo(0, window.scrollY || 0);
-                if (document.documentElement) { document.documentElement.scrollLeft = 0; }
-                if (document.body) { document.body.scrollLeft = 0; }
               } catch (e) {}
             })();
         """.trimIndent()
@@ -1138,13 +1137,17 @@ object RetainedWebViewManager {
                   try {
                     var markTouch = function() { lastUserTouchAt = Date.now(); };
                     window.addEventListener('touchstart', markTouch, { passive: true, capture: true });
+                    window.addEventListener('touchmove', markTouch, { passive: true, capture: true });
                     window.addEventListener('scroll', markTouch, { passive: true, capture: true });
+                    window.addEventListener('wheel', markTouch, { passive: true, capture: true });
                   } catch (e) {}
 
                   function isVisible(el) {
-                    if (!el || !el.getBoundingClientRect) { return false; }
-                    var r = el.getBoundingClientRect();
-                    return r.width > 4 && r.height > 4;
+                    if (!el) { return false; }
+                    if (typeof el.checkVisibility === 'function') {
+                      return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+                    }
+                    return (el.offsetWidth > 4 && el.offsetHeight > 4);
                   }
 
                   function countWorkedMarkers(text) {
@@ -1222,7 +1225,7 @@ object RetainedWebViewManager {
                       }
 
                       // Never run DOM scans while the user is actively touching or scrolling
-                      if ((now - lastUserTouchAt) < 1200) {
+                      if ((now - lastUserTouchAt) < 2500) {
                         domDirty = true;
                         return;
                       }
@@ -1414,8 +1417,8 @@ object RetainedWebViewManager {
               }
               if (style) {
                 style.textContent =
-                  'html, body { scroll-behavior: auto !important; -webkit-tap-highlight-color: transparent !important; } ' +
-                  'a, button, input, textarea, [role="button"] { touch-action: manipulation !important; }';
+                  'html, body { -webkit-tap-highlight-color: transparent !important; ' +
+                  'touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; }';
               }
             })();
         """.trimIndent()

@@ -4,6 +4,19 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-11-23
+
+### Fixed & Optimized
+- **60/120Hz Hardware-Accelerated Smooth Scrolling Across All Web Workspaces**:
+  - Restored Chromium GPU compositor-thread root scrolling across all 8 web apps (Antigravity Remote, T3 Code Web, Google AI Studio, Pulse Browser, GitHub, Vercel, Supabase, and Gemini) by removing blocking `overflow-x: hidden !important;` from root `html, body`.
+  - Removed `text-rendering: optimizeLegibility;`, eliminating synchronous HarfBuzz kerning and font-shaping stalls on every scrolled text frame.
+  - Eliminated global `max-width: 100vw !important;` overrides on `#root, #app, main` that caused continuous layout reflows in Monaco Editor, virtualized chat feeds, and diff viewers.
+  - Enabled Chromium tile pre-rasterization (`settings.offscreenPreRaster = true`) to pre-render offscreen content before fast fling gestures enter the viewport.
+  - Switched `overScrollMode` to `View.OVER_SCROLL_IF_CONTENT_SCROLLS` with `scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY` and `isNestedScrollingEnabled = false`, restoring Android's natural fling deceleration curves and StretchEdgeEffect physics.
+  - Replaced wildcard `touch-action: manipulation !important;` on buttons/links with compositor-friendly `html, body { touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; }`, allowing multi-touch gestures to execute asynchronously on the GPU compositor thread without waiting on JavaScript.
+  - Replaced `getBoundingClientRect()` loops in remote agent observer with non-reflowing native `checkVisibility()` and outer dimension metrics, pausing observer scans during active user touch, scroll, and wheel gestures.
+  - Explicitly asserted window hardware acceleration (`FLAG_HARDWARE_ACCELERATED`) and configured `preferredDisplayModeId` to request the display's maximum supported refresh rate (90Hz / 120Hz).
+
 ## [1.2.2] - 2026-11-23
 
 ### Added

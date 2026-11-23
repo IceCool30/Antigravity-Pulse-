@@ -23,6 +23,8 @@ debug.keystore.base64
 *.jks
 *.p12
 *.pem
+*.apk
+SHA256SUMS.txt
 release-artifacts/
 .aistudio/
 .build-outputs/

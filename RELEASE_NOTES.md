@@ -1,3 +1,29 @@
+# Antigravity Pulse v1.2.3 Release Notes
+
+**Antigravity Pulse v1.2.3** is a major scrolling performance and smoothness release. It eliminates WebView scrolling lag and frame drops across all 8 web workspaces (Antigravity Remote, T3 Code, Google AI Studio, Pulse Browser, GitHub, Vercel, Supabase, and Gemini), unlocking butter-smooth 60Hz and 120Hz scrolling.
+
+It upgrades cleanly in place over v1.2.2 with no uninstall and no data loss.
+
+---
+
+## What's Fixed & Optimized in v1.2.3
+
+### 1. GPU Compositor-Threaded Scrolling
+- **Fast-Path Root Scrolling**: Removed `overflow-x: hidden !important;` from root `html, body`, restoring Blink's asynchronous compositor-driven viewport scrolling. Scrolling no longer stalls on the JavaScript main thread.
+- **Fast-Path Font Rasterization**: Removed `text-rendering: optimizeLegibility;` on `html, body`. Chromium now caches glyphs without recalculating kerning pairs and ligatures on every frame.
+- **Reflow Prevention**: Removed heavy global overrides on `#root, #app, main, [role="main"]` that forced repeated layout reflows during scrolling in Monaco Editor, markdown renderers, and virtualized lists.
+
+### 2. High-Performance Touch & Gesture Handling
+- **Non-Blocking Touch Gestures**: Replaced wildcard `touch-action: manipulation` across thousands of buttons and links with `html, body { touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; }`, allowing instant fling and pan gestures directly on the GPU thread.
+- **Layout-Free Agent Observer**: Replaced `getBoundingClientRect()` loops with non-reflowing `checkVisibility()` and outer dimension metrics in the remote agent observer, and paused all background DOM inspections during active touch, scroll, and wheel gestures.
+
+### 3. Native Android Scroll Physics & 120Hz Display Modes
+- **Offscreen Pre-Rasterization**: Enabled `settings.offscreenPreRaster = true` across all WebViews, eliminating blank tile flashing during high-velocity flings.
+- **Smooth Fling Deceleration**: Restored Android's natural fling deceleration physics and stretch overscroll via `overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS` with overlay scrollbars and `isNestedScrollingEnabled = false`.
+- **High-Refresh-Rate Display**: Configured the Activity window to request the hardware display's maximum refresh rate (90Hz / 120Hz) via `preferredDisplayModeId`.
+
+---
+
 # Antigravity Pulse v1.2.2 Release Notes
 
 **Antigravity Pulse v1.2.2** adds in-app self-updating and unifies the app icon with the desktop
