@@ -56,11 +56,13 @@ object UpdateDownloader {
      */
     suspend fun downloadApk(context: Context, release: LatestRelease): File = withContext(Dispatchers.IO) {
         val apkFileName = "Antigravity-Pulse-${release.tagName}.apk"
-        val sha256SumsUrl = release.sha256SumsUrl
-            ?: throw IllegalStateException("Release ${release.tagName} did not include a SHA256SUMS.txt asset.")
-        val expectedSha256 = downloadText(context, sha256SumsUrl)
-            ?.let { parseSha256Sums(it, apkFileName) }
-            ?: throw IllegalStateException("SHA256SUMS.txt for ${release.tagName} did not contain an entry for $apkFileName.")
+        // The fallback manifest supplies the hash directly; GitHub Releases supplies the
+        // SHA256SUMS.txt asset. Both are verified before the APK is handed to the installer.
+        val expectedSha256 = release.sha256?.takeIf { it.matches(Regex("(?i)[a-f0-9]{64}")) }
+            ?: release.sha256SumsUrl?.let { url ->
+                downloadText(context, url)?.let { parseSha256Sums(it, apkFileName) }
+            }
+            ?: throw IllegalStateException("Release ${release.tagName} did not include a verifiable SHA-256 checksum.")
         val apkUrl = release.apkAssetUrl
             ?: throw IllegalStateException("Release ${release.tagName} did not include a downloadable APK asset.")
 

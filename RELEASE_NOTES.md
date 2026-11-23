@@ -7,6 +7,11 @@ release. It upgrades cleanly in place over v1.2.1 with no uninstall and no data 
 > startup crash. The APK on this release has been rebuilt with the Firebase configuration restored
 > and verified launching on a physical device. If you downloaded the earlier APK, reinstall this one.
 
+> **Performance + updater correction:** the daily update check was performing network I/O on the UI
+> thread, causing scrolling lag and freezes. It now runs on `Dispatchers.IO`. The updater also falls
+> back to a rate-limit-free manifest
+> (`app/update-manifest.json`) when GitHub's REST API is unreachable from your network.
+
 ## What's New in v1.2.2
 
 - **In-app updates.** Settings now has an Updates section with a manual check, release notes,
