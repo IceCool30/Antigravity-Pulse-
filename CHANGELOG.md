@@ -4,6 +4,17 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-11-23
+
+### Added
+- In-app update checker and Updates settings section with release notes, download progress, and
+  one-tap verified install.
+- Daily background update check with an Android notification when a newer release is available.
+
+### Changed
+- Launcher, adaptive, monochrome, and notification icons now use the shared obsidian/warm-peach orbit
+  mark used by Antigravity Pulse Desktop.
+
 ## [1.2.1] - 2026-11-23
 
 ### Fixed & Optimized

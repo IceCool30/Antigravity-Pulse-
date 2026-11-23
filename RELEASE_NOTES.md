@@ -1,3 +1,23 @@
+# Antigravity Pulse v1.2.2 Release Notes
+
+**Antigravity Pulse v1.2.2** adds in-app self-updating and unifies the app icon with the desktop
+release. It upgrades cleanly in place over v1.2.1 with no uninstall and no data loss.
+
+## What's New in v1.2.2
+
+- **In-app updates.** Settings now has an Updates section with a manual check, release notes,
+  download progress, and one-tap install. The app also checks GitHub Releases once a day in the
+  background and posts a notification when a newer version is available.
+- **Verified downloads.** The APK is downloaded to the app cache and its SHA-256 is checked against
+  the release's `SHA256SUMS.txt` before Android is asked to install it. An unverified file is never
+  handed to the installer.
+- **Unknown-sources handling.** If install permission is missing, the app links to Android's
+  *Install unknown apps* settings so you can grant it and retry.
+- **Unified branding.** The launcher icon, adaptive icon, monochrome theme icon, and notification
+  glyph now use the same obsidian/warm-peach orbit mark as Antigravity Pulse Desktop.
+
+---
+
 # Antigravity Pulse v1.2.1 Release Notes
 
 **Antigravity Pulse v1.2.1** is a focused touch-responsiveness and performance patch. It removes GPU-heavy offscreen compositing from live WebViews, genuinely suspends inactive RAM-pinned workspaces without sacrificing zero-reload retention, defers expensive snapshot work off the touch path, and makes the movable floating handle respond instantly to taps and 1:1 drags.
