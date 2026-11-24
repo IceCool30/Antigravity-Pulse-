@@ -629,8 +629,7 @@ object T3CodePinnedWebViewManager {
               }
               if (style) {
                 style.textContent =
-                  'html, body { -webkit-tap-highlight-color: transparent !important; ' +
-                  'touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; }';
+                  '${RetainedWebViewManager.LAG_BOOSTER_CSS}';
               }
             })();
             """.trimIndent()
@@ -728,9 +727,14 @@ object T3CodePinnedWebViewManager {
             setBackgroundColor(android.graphics.Color.BLACK)
             setLayerType(View.LAYER_TYPE_NONE, null)
             isNestedScrollingEnabled = false
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
+            // through an offscreen stretch layer while dragging past either end of the page,
+            // which is a well-known source of dropped frames on mid-range mobile GPUs.
+            overScrollMode = View.OVER_SCROLL_NEVER
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            isVerticalScrollBarEnabled = true
+            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
+            // invalidates the WebView on every scroll frame.
+            isVerticalScrollBarEnabled = false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 settings.offscreenPreRaster = true
             }
@@ -883,9 +887,14 @@ object T3CodePinnedWebViewManager {
             setBackgroundColor(android.graphics.Color.BLACK)
             setLayerType(View.LAYER_TYPE_NONE, null)
             isNestedScrollingEnabled = false
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
+            // through an offscreen stretch layer while dragging past either end of the page,
+            // which is a well-known source of dropped frames on mid-range mobile GPUs.
+            overScrollMode = View.OVER_SCROLL_NEVER
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            isVerticalScrollBarEnabled = true
+            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
+            // invalidates the WebView on every scroll frame.
+            isVerticalScrollBarEnabled = false
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {

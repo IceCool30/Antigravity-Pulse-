@@ -4,6 +4,17 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.4] - 2026-11-24
+
+### Fixed & Optimized
+- **Scroll jank elimination across every web workspace**:
+  - Reverted `overScrollMode` to `OVER_SCROLL_NEVER` on all eight WebViews. The Android 12+ "stretch" overscroll effect re-renders the entire WebView through an offscreen stretch layer while dragging past either end of a page, which is a major source of dropped frames on mid-range GPUs.
+  - Disabled the native overlay scrollbar (`isVerticalScrollBarEnabled = false`). Pages draw their own scroll indicators, and the native bar invalidated the WebView on every scroll frame.
+  - The Lag Booster stylesheet now also strips `backdrop-filter` / `-webkit-backdrop-filter` and `background-attachment: fixed`, and pins `scroll-behavior: auto`. Chromium performs a backdrop texture readback every scroll frame for frosted sticky headers and toolbars, which alone can drop a third of all frames; `background-attachment: fixed` forces a full-viewport repaint per frame.
+  - Inactive keep-alive workspace slots are now skipped at the draw phase. They stay composed, measured and attached (so their WebViews never reload), but no longer replay their full-screen background, toolbar and dividers underneath the live workspace on every WebView frame.
+  - Removed the redundant full-screen `background` behind the active WebView container; the app Scaffold already paints it.
+  - Remote agent observer: replaced `innerText` reads (which force a synchronous Blink layout) with `textContent`, scoped text scans to the `<main>` content region instead of the whole document, and skipped the approval-button walk on timer-only scans when the DOM did not change. Mutation throttle raised 900 ms → 1400 ms and idle timer 1600 ms → 2400 ms.
+
 ## [1.2.3] - 2026-11-23
 
 ### Fixed & Optimized

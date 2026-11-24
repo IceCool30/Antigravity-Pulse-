@@ -56,6 +56,24 @@ data class BridgeTelemetry(
 object RetainedWebViewManager {
     private const val MAX_URL_LENGTH = 2048
 
+    /**
+     * Scroll-critical stylesheet injected by the Lag Booster into every web workspace.
+     *
+     * Chromium rasterizes `backdrop-filter` (frosted sticky headers, toolbars and modals) by
+     * reading the backdrop texture back every single scroll frame. On mid-range mobile GPUs that
+     * readback alone is enough to drop a third of all frames during a fling, so the booster
+     * disables it while keeping the element's own background paint. `background-attachment: fixed`
+     * is neutralised for the same reason (it forces a full-viewport repaint per scroll frame), and
+     * `scroll-behavior` is pinned to `auto` so programmatic scrolling never runs a JS-driven smooth
+     * animation on top of the compositor.
+     */
+    const val LAG_BOOSTER_CSS: String =
+        "html, body { -webkit-tap-highlight-color: transparent !important; " +
+            "touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; " +
+            "scroll-behavior: auto !important; } " +
+            "*, *::before, *::after { -webkit-backdrop-filter: none !important; " +
+            "backdrop-filter: none !important; background-attachment: scroll !important; }"
+
     @SuppressLint("StaticFieldLeak")
     private var pinnedWebView: WebView? = null
     private var lastLoadedEndpoint: String = "__UNINITIALIZED__"
@@ -556,9 +574,14 @@ object RetainedWebViewManager {
             // hardware FBO layer, preventing DRM rendernode errors on software-rendered environments.
             setLayerType(View.LAYER_TYPE_NONE, null)
             isNestedScrollingEnabled = false
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
+            // through an offscreen stretch layer while dragging past either end of the page,
+            // which is a well-known source of dropped frames on mid-range mobile GPUs.
+            overScrollMode = View.OVER_SCROLL_NEVER
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            isVerticalScrollBarEnabled = true
+            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
+            // invalidates the WebView on every scroll frame.
+            isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
             setInitialScale(0)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1161,13 +1184,13 @@ object RetainedWebViewManager {
                     for (var i = 0; i < nodes.length; i++) {
                       var el = nodes[i];
                       if (!isVisible(el) || el.disabled) { continue; }
-                      var label = ((el.innerText || el.textContent || '') + '').trim();
+                      var label = ((el.textContent || '') + '').trim();
                       if (label.length === 0 || label.length > 28) { continue; }
                       if (/^(approve|accept|accept all|allow|allow once|allow always|run|run command|proceed|confirm)$/i.test(label)) {
                         var ctx = '';
                         var parent = el.parentElement && el.parentElement.parentElement;
-                        if (parent && parent.innerText) {
-                          ctx = parent.innerText.replace(/\s+/g, ' ').trim().slice(0, 140);
+                        if (parent && parent.textContent) {
+                          ctx = parent.textContent.replace(/\s+/g, ' ').trim().slice(0, 140);
                         }
                         found.push({ label: label, key: label.toLowerCase() + '|' + ctx.slice(0, 60), context: ctx });
                       }
@@ -1186,7 +1209,7 @@ object RetainedWebViewManager {
                         (b.getAttribute('aria-label') || '') + ' ' +
                         (b.getAttribute('title') || '') + ' ' +
                         (b.getAttribute('data-testid') || '') + ' ' +
-                        (b.innerText || '')
+                        (b.textContent || '')
                       ).trim();
                       if (/\b(stop generating|stop response|stop agent|cancel generation|abort)\b/i.test(meta) || /^stop$/i.test(meta)) {
                         return true;
@@ -1201,7 +1224,7 @@ object RetainedWebViewManager {
                       for (var i = blocks.length - 1; i >= 0; i--) {
                         var el = blocks[i];
                         if (!isVisible(el)) { continue; }
-                        var txt = (el.innerText || '').replace(/\s+/g, ' ').trim();
+                        var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
                         if (txt.length >= 18 && !/^ask anything/i.test(txt)) {
                           return txt.slice(0, 180);
                         }
@@ -1233,10 +1256,18 @@ object RetainedWebViewManager {
                       if (fromTimer && !domDirty && !isWorking && baselineCaptured) {
                         return;
                       }
+                      // Remember whether the DOM actually changed before clearing the flag, so
+                      // timer-only scans on an unchanged page can skip the expensive button walk
+                      // (querySelectorAll over every button plus a visibility check on each one).
+                      var domChanged = domDirty;
                       domDirty = false;
 
-                      // Use textContent instead of innerText to avoid synchronous Blink layout reflows
-                      var bodyText = (document.body && document.body.textContent) ? document.body.textContent : '';
+                      // Scan only the main content region when the app exposes one. Reading
+                      // `document.body.textContent` on a long agent conversation allocates a
+                      // multi-megabyte string (and triggers a major GC) on every scan; the main
+                      // region holds the growing transcript and is several times smaller.
+                      var textScope = document.querySelector('main, [role="main"]') || document.body;
+                      var bodyText = (textScope && textScope.textContent) ? textScope.textContent : '';
                       var textLen = bodyText.length;
                       var workedCount = countWorkedMarkers(bodyText);
 
@@ -1246,7 +1277,7 @@ object RetainedWebViewManager {
                         return;
                       }
 
-                      var approvals = collectApprovalButtons();
+                      var approvals = domChanged ? collectApprovalButtons() : [];
                       if (!baselineCaptured) {
                         baselineCaptured = true;
                         lastTextLen = textLen;
@@ -1323,10 +1354,10 @@ object RetainedWebViewManager {
                     throttleTimer = setTimeout(function() {
                       throttleTimer = null;
                       inspectState(false);
-                    }, 900);
+                    }, 1400);
                   });
                   observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-                  setInterval(function() { inspectState(true); }, 1600);
+                  setInterval(function() { inspectState(true); }, 2400);
                 }
 
                 if (document.body) {
@@ -1417,8 +1448,7 @@ object RetainedWebViewManager {
               }
               if (style) {
                 style.textContent =
-                  'html, body { -webkit-tap-highlight-color: transparent !important; ' +
-                  'touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; }';
+                  '${RetainedWebViewManager.LAG_BOOSTER_CSS}';
               }
             })();
         """.trimIndent()

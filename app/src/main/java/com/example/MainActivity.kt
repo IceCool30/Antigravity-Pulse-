@@ -124,6 +124,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -1581,7 +1582,6 @@ fun AntigravityPulseApp(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .background(bg)
                 ) {
                     Column(modifier = Modifier.fillMaxSize()) {
                         AnimatedVisibility(
@@ -2310,6 +2310,11 @@ fun AntigravityPulseApp(
  * nodes so Chromium renders directly without an offscreen hardware FBO copy or touch-dispatch lag.
  * Inactive slots drop to `zIndex(0f)` with `View.GONE` + per-instance `onPause()` (never pausing
  * global timers), giving instant 0ms tab switching and zero background GPU contention.
+ *
+ * Inactive slots are also skipped at the draw phase. They stay composed, measured and attached
+ * (so their WebViews are never detached or reloaded), but painting their full-screen background,
+ * toolbar and dividers underneath the live workspace forced the GPU to replay several extra
+ * full-screen layers on every single WebView scroll frame.
  */
 @Composable
 private fun KeepAliveWorkspaceSlot(
@@ -2324,6 +2329,11 @@ private fun KeepAliveWorkspaceSlot(
             .fillMaxSize()
             .zIndex(if (isActive) 1f else 0f)
             .then(if (isActive) Modifier else Modifier.clearAndSetSemantics {})
+            .drawWithContent {
+                if (isActive) {
+                    drawContent()
+                }
+            }
     ) {
         content()
     }

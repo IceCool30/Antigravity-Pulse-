@@ -1,11 +1,11 @@
 {
-  "tagName": "v1.2.3",
-  "versionName": "1.2.3",
-  "publishedAt": "2026-11-23T20:45:00Z",
-  "releaseNotes": "Hardware-accelerated 60/120Hz smooth scrolling across all 8 web workspaces. Restored GPU compositor root scrolling, removed font-shaping text stalls and layout reflows, enabled tile pre-rasterization, and restored native fling physics.",
-  "apkUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.3/Antigravity-Pulse-v1.2.3.apk",
+  "tagName": "v1.2.4",
+  "versionName": "1.2.4",
+  "publishedAt": "2026-11-24T00:00:00Z",
+  "releaseNotes": "Scroll jank elimination across all web workspaces: disabled Android 12+ stretch overscroll and native overlay scrollbars, stripped backdrop-filter/background-attachment:fixed from the DOM lag booster CSS, stopped painting inactive workspace slots, and made the remote agent observer read textContent instead of forcing layout.",
+  "apkUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.4/Antigravity-Pulse-v1.2.4.apk",
   "apkSizeBytes": 41958541,
-  "sha256": "3c5caae6caf62fdae3d0e288c36c4db41bef96619296377a5daac5c575162cfa",
-  "sha256SumsUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.3/SHA256SUMS.txt",
-  "releaseNotesUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.3"
+  "sha256": "b916dfa3c6193958a58064afa346cb7951f831e89293ff8cff0c645e7f13d6dc",
+  "sha256SumsUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.4/SHA256SUMS.txt",
+  "releaseNotesUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.4"
 }
