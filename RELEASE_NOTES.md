@@ -1,3 +1,25 @@
+# Antigravity Pulse v1.2.5 Release Notes
+
+**Antigravity Pulse v1.2.5** fixes in-app update fetching/downloading/installing and eliminates scrolling slowness across all 8 web workspaces (Antigravity Remote, T3 Code, Google AI Studio, Gemini, GitHub, Vercel, Supabase, and Pulse Browser).
+
+It upgrades cleanly in place over v1.2.4 (and all earlier v1.x releases) with no uninstall and no data loss.
+
+---
+
+## What's Fixed in v1.2.5
+
+### 1. In-App Auto-Updater Fixed End-to-End
+- **4-Tier Resilient Release Lookup**: Automatically tries GitHub Releases API → direct `/releases/latest` redirect (immune to REST API rate limits) → cache-busted raw manifest → jsDelivr CDN mirror, strictly over HTTPS on trusted GitHub/CDN hosts.
+- **Fixed Download & Install Crashes**: Creates `cacheDir/update/` before download, tracks cumulative download progress (MB + %) with single-pass SHA-256 verification, and fixes `Intent.setDataAndType(...)` so Android's package installer launches cleanly.
+- **Accurate Status & Error Reporting**: Settings → App Updates now shows real checking/error/retry states instead of falsely claiming you are up to date on failures, and daily checks retry automatically if a network check fails.
+
+### 2. Smooth 60/120Hz Scrolling Across Every Workspace
+- **Display-Aware WebView Context**: All 8 pinned WebViews now attach to the active Activity `UiContext` via `MutableContextWrapper` (restoring native 90/120Hz VSync, touch slop, and fling physics) and cleanly detach on `onDestroy()`.
+- **Eliminated Blink Style & GPU Tile Stalls**: Removed the universal `*` CSS wildcard rule from the Lag Booster, disabled `offscreenPreRaster` across pinned tabs so GPU tile memory isn't starved, and removed routine `onPageFinished` main-thread snapshot/cookie stalls.
+- **Zero Foreground Interference**: Cross-tab keep-alive JS heartbeats now pause while you are actively scrolling in the foreground, and the active WebView renders directly without elevated idle-handle shadows or extra draw wrappers.
+
+---
+
 # Antigravity Pulse v1.2.3 Release Notes
 
 **Antigravity Pulse v1.2.3** is a major scrolling performance and smoothness release. It eliminates WebView scrolling lag and frame drops across all 8 web workspaces (Antigravity Remote, T3 Code, Google AI Studio, Pulse Browser, GitHub, Vercel, Supabase, and Gemini), unlocking butter-smooth 60Hz and 120Hz scrolling.

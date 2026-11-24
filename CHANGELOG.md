@@ -4,6 +4,24 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.5] - 2026-11-24
+
+### Fixed & Optimized
+- **Reliable In-App Auto-Updater (`UpdateChecker`, `UpdateDownloader`, `UpdateInstaller`, `UpdateSettingsSection`)**:
+  - Upgraded release lookup to a 4-tier HTTPS chain with explicit redirect following and strict host allowlisting: GitHub Releases REST API → direct `/releases/latest` HTTP redirect (zero API rate limit) → cache-busted raw GitHub manifest → jsDelivr CDN mirror.
+  - Fixed guaranteed `FileNotFoundException` by creating `cacheDir/update/` before writing and downloading safely to a `.part` temp file with single-pass streaming SHA-256 verification.
+  - Fixed download progress stuck at `0%` (now tracks cumulative bytes + MB readout throttled at 100 ms intervals).
+  - Fixed Android package installer launch bug by using `Intent.setDataAndType(uri, APK_MIME_TYPE)` instead of setting `type` after `data`.
+  - Fixed App Updates settings UI falsely reporting "You're up to date" while checking or on network errors, and stopped the daily check from stamping its 24h cooldown on failed fetches.
+- **Smooth 60/120Hz Scrolling Across All 8 Web Workspaces**:
+  - Switched all pinned WebViews from non-UI `applicationContext` to a display-aware Activity `MutableContextWrapper` (restoring native 90/120Hz VSync, touch slop, and fling physics) and cleanly detach back to `applicationContext` in `MainActivity.onDestroy()` to prevent leaks.
+  - Removed the universal `*` / `*::before` / `*::after` wildcard CSS rule from `LAG_BOOSTER_CSS` that invalidated Blink's style-sharing cache on every virtualized scroll frame.
+  - Disabled `offscreenPreRaster` across all pinned WebViews so multiple RAM-pinned tabs never starve Chromium's GPU tile pool during active scrolling.
+  - Removed routine `onPageFinished` main-thread `webView.draw()` snapshots, `saveState()`, and `flushCookies()` stalls; offline continuity snapshots remain active on network drops and backgrounding.
+  - Paused cross-tab keep-alive JS heartbeats while the app is in the foreground, filtered `preferredDisplayModeId` to match current physical display resolution, and removed the elevated shadow and extra `drawWithContent` wrapper over the active WebView.
+- **Release Automation**:
+  - Added `scripts/publish-release.ps1` for deterministic local signed builds, certificate verification, `SHA256SUMS.txt` + `app/update-manifest.json` generation, and GitHub Release publishing.
+
 ## [1.2.4] - 2026-11-24
 
 ### Fixed & Optimized
