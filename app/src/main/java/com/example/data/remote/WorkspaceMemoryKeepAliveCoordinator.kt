@@ -190,6 +190,18 @@ object WorkspaceMemoryKeepAliveCoordinator {
     }
 
     /**
+     * Rebinds every pinned WebView's [android.content.MutableContextWrapper] back to
+     * `applicationContext` when [com.example.MainActivity] is destroyed so zero Activity references leak.
+     */
+    fun detachActivityContextsAll() {
+        RetainedWebViewManager.detachActivityContext()
+        T3CodePinnedWebViewManager.detachActivityContext()
+        AiStudioPinnedWebViewManager.detachActivityContext()
+        DevWebWorkspaceRegistry.detachActivityContextsAll()
+        PulseBrowserManager.detachActivityContextsAll()
+    }
+
+    /**
      * Responds to Android OS memory trim callbacks by snapshotting every live WebView's state
      * bundle and flushing cookies—never forcibly destroying user workspaces so sessions stay live.
      */

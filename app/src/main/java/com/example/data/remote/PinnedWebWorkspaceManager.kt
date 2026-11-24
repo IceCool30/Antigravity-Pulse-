@@ -373,6 +373,10 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
         }
     }
 
+    fun detachActivityContext() {
+        WebViewOfflineCacheHelper.detachActivityContext(pinnedWebView)
+    }
+
     fun releaseFromRam() {
         val oldView = pinnedWebView ?: return
         saveStateBackup()
@@ -540,8 +544,9 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
         onPageEvent: (String) -> Unit
     ): WebView {
         domLagBoosterActive = domLagBooster
-        val appContext = context.applicationContext
-        val webView = pinnedWebView ?: WebView(appContext).apply {
+        val webView = pinnedWebView?.also {
+            WebViewOfflineCacheHelper.attachActivityContext(it, context)
+        } ?: WebViewOfflineCacheHelper.createDisplayAwareWebView(context).apply {
             try {
                 WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             } catch (_: Exception) {
@@ -592,7 +597,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                     safeBrowsingEnabled = true
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    offscreenPreRaster = true
+                    offscreenPreRaster = false
                 }
                 layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
                 textZoom = 100
@@ -758,7 +763,6 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                     super.onPageFinished(view, url)
                     _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
-                    flushCookies()
                     val isErrorPage = url.isNullOrBlank() ||
                         url.startsWith("chrome-error:", ignoreCase = true) ||
                         url.startsWith("about:", ignoreCase = true)
@@ -782,10 +786,6 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                             pendingRestoreScroll = null
                             WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
                         }
-                        view?.postDelayed({
-                            captureLatestSnapshotIfHealthy(view)
-                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { savedStateBackup = it }
-                        }, 650L)
                     }
                     if (!isErrorPage) {
                         if (!_isDesktopModeState.value) {
@@ -880,6 +880,10 @@ object DevWebWorkspaceRegistry {
 
     fun saveAllStateBackups() {
         sessions.values.forEach { if (it.isPinnedInRam()) it.saveStateBackup() }
+    }
+
+    fun detachActivityContextsAll() {
+        sessions.values.forEach { it.detachActivityContext() }
     }
 
     fun allSessions(): Collection<PinnedWebWorkspaceSession> = sessions.values

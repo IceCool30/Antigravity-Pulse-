@@ -237,6 +237,10 @@ object AiStudioPinnedWebViewManager {
         }
     }
 
+    fun detachActivityContext() {
+        WebViewOfflineCacheHelper.detachActivityContext(pinnedAiStudioWebView)
+    }
+
     fun releaseFromRam() {
         val oldView = pinnedAiStudioWebView ?: return
         saveStateBackup()
@@ -440,8 +444,9 @@ object AiStudioPinnedWebViewManager {
         onPageEvent: (String) -> Unit
     ): WebView {
         domLagBoosterActive = domLagBooster
-        val appContext = context.applicationContext
-        val webView = pinnedAiStudioWebView ?: WebView(appContext).apply {
+        val webView = pinnedAiStudioWebView?.also {
+            WebViewOfflineCacheHelper.attachActivityContext(it, context)
+        } ?: WebViewOfflineCacheHelper.createDisplayAwareWebView(context).apply {
             try {
                 WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             } catch (_: Exception) {
@@ -490,7 +495,7 @@ object AiStudioPinnedWebViewManager {
                     safeBrowsingEnabled = true
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    offscreenPreRaster = true
+                    offscreenPreRaster = false
                 }
                 useWideViewPort = true
                 loadWithOverviewMode = false
@@ -660,7 +665,6 @@ object AiStudioPinnedWebViewManager {
                     super.onPageFinished(view, url)
                     _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
-                    flushCookies()
                     val isErrorPage = url.isNullOrBlank() ||
                         url.startsWith("chrome-error:", ignoreCase = true) ||
                         url.startsWith("about:", ignoreCase = true)
@@ -684,10 +688,6 @@ object AiStudioPinnedWebViewManager {
                             pendingRestoreScroll = null
                             WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
                         }
-                        view?.postDelayed({
-                            captureLatestSnapshotIfHealthy(view)
-                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { savedStateBackup = it }
-                        }, 650L)
                     }
                     if (!isErrorPage) {
                         RetainedWebViewManager.injectMobileLayoutFix(view)

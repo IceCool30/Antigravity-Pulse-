@@ -57,22 +57,15 @@ object RetainedWebViewManager {
     private const val MAX_URL_LENGTH = 2048
 
     /**
-     * Scroll-critical stylesheet injected by the Lag Booster into every web workspace.
+     * Minimal, zero-wildcard stylesheet injected by the Lag Booster into web workspaces.
      *
-     * Chromium rasterizes `backdrop-filter` (frosted sticky headers, toolbars and modals) by
-     * reading the backdrop texture back every single scroll frame. On mid-range mobile GPUs that
-     * readback alone is enough to drop a third of all frames during a fling, so the booster
-     * disables it while keeping the element's own background paint. `background-attachment: fixed`
-     * is neutralised for the same reason (it forces a full-viewport repaint per scroll frame), and
-     * `scroll-behavior` is pinned to `auto` so programmatic scrolling never runs a JS-driven smooth
-     * animation on top of the compositor.
+     * Intentionally avoids universal `*` / `*::before` / `*::after` rules and global `touch-action`
+     * overrides, which otherwise invalidate Blink's style-sharing cache and force expensive style
+     * recalculations across virtualized feeds on every scroll frame.
      */
     const val LAG_BOOSTER_CSS: String =
         "html, body { -webkit-tap-highlight-color: transparent !important; " +
-            "touch-action: pan-x pan-y pinch-zoom; overscroll-behavior-y: contain; " +
-            "scroll-behavior: auto !important; } " +
-            "*, *::before, *::after { -webkit-backdrop-filter: none !important; " +
-            "backdrop-filter: none !important; background-attachment: scroll !important; }"
+            "scroll-behavior: auto !important; }"
 
     @SuppressLint("StaticFieldLeak")
     private var pinnedWebView: WebView? = null
@@ -435,12 +428,17 @@ object RetainedWebViewManager {
      */
     fun interceptUnsafeSubresource(request: WebResourceRequest?): WebResourceResponse? {
         val uri = request?.url ?: return null
-        val scheme = uri.scheme?.lowercase().orEmpty()
-        val host = uri.host?.lowercase().orEmpty()
-        val isBlocked = scheme == "file" ||
-            scheme == "content" ||
-            isBlockedMetadataOrUnspecifiedHost(host) ||
-            (scheme == "http" && isHttpsOnlyWorkspaceHost(host))
+        val scheme = uri.scheme ?: return null
+        val isHttps = scheme.equals("https", ignoreCase = true)
+        val isBlocked = if (isHttps) {
+            val host = uri.host
+            host != null && isBlockedMetadataOrUnspecifiedHost(host.lowercase())
+        } else if (scheme.equals("http", ignoreCase = true)) {
+            val host = uri.host?.lowercase().orEmpty()
+            isBlockedMetadataOrUnspecifiedHost(host) || isHttpsOnlyWorkspaceHost(host)
+        } else {
+            scheme.equals("file", ignoreCase = true) || scheme.equals("content", ignoreCase = true)
+        }
         return if (isBlocked) {
             WebResourceResponse(
                 "text/plain",
@@ -524,6 +522,10 @@ object RetainedWebViewManager {
         }
     }
 
+    fun detachActivityContext() {
+        WebViewOfflineCacheHelper.detachActivityContext(pinnedWebView)
+    }
+
     fun releaseFromRam() {
         val oldView = pinnedWebView ?: return
         saveStateBackup()
@@ -557,8 +559,9 @@ object RetainedWebViewManager {
         onJsBridgeMessage: (String) -> Unit
     ): WebView {
         domLagBoosterActive = domLagBooster
-        val appContext = context.applicationContext
-        val webView = pinnedWebView ?: WebView(appContext).apply {
+        val webView = pinnedWebView?.also {
+            WebViewOfflineCacheHelper.attachActivityContext(it, context)
+        } ?: WebViewOfflineCacheHelper.createDisplayAwareWebView(context).apply {
             // Never allow remote Chrome DevTools inspection in release builds
             try {
                 WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -614,7 +617,9 @@ object RetainedWebViewManager {
                     safeBrowsingEnabled = true
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    offscreenPreRaster = true
+                    // Keep offscreenPreRaster false so multiple pinned WebViews never starve
+                    // Chromium's GPU tile pool during active scrolling.
+                    offscreenPreRaster = false
                 }
                 useWideViewPort = true
                 loadWithOverviewMode = false
@@ -771,7 +776,6 @@ object RetainedWebViewManager {
                     super.onPageFinished(view, url)
                     _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
-                    flushCookies()
                     val isErrorPage = url.isNullOrBlank() ||
                         url.startsWith("chrome-error:", ignoreCase = true) ||
                         url.startsWith("about:", ignoreCase = true)
@@ -791,10 +795,6 @@ object RetainedWebViewManager {
                             pendingRestoreScroll = null
                             WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
                         }
-                        view?.postDelayed({
-                            captureLatestSnapshotIfHealthy(view)
-                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { savedStateBackup = it }
-                        }, 650L)
                     }
                     if (!isErrorPage) {
                         injectMobileLayoutFix(view)

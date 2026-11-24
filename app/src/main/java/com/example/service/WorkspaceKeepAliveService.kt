@@ -136,7 +136,11 @@ class WorkspaceKeepAliveService : Service() {
         heartbeatJob = serviceScope.launch {
             while (isActive) {
                 delay(HEARTBEAT_INTERVAL_MS)
-                WorkspaceMemoryKeepAliveCoordinator.runKeepAliveHeartbeatAll()
+                // Only run cross-tab JS keep-alive heartbeats while backgrounded so active
+                // foreground scrolling never contends with hidden WebView IPCs.
+                if (!PulseNotificationManager.isAppInForeground) {
+                    WorkspaceMemoryKeepAliveCoordinator.runKeepAliveHeartbeatAll()
+                }
                 refreshNotificationQuietly()
             }
         }

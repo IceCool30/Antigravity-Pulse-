@@ -166,6 +166,7 @@ import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.data.remote.WorkspaceMemoryKeepAliveCoordinator
 import com.example.notifications.PulseNotificationManager
 import com.example.service.WorkspaceKeepAliveService
+import com.example.updater.UpdateCheckResult
 import com.example.updater.UpdateChecker
 import com.example.ui.components.FloatingPanelTabItem
 import com.example.ui.components.MovableFloatingControlPanel
@@ -213,8 +214,17 @@ class MainActivity : FragmentActivity() {
                     @Suppress("DEPRECATION")
                     windowManager.defaultDisplay
                 }
+                val currentMode = currentDisplay?.mode
                 val modes = currentDisplay?.supportedModes
-                val maxRefreshMode = modes?.maxByOrNull { it.refreshRate }
+                val matchingResolutionModes = if (currentMode != null && modes != null) {
+                    modes.filter {
+                        it.physicalWidth == currentMode.physicalWidth &&
+                            it.physicalHeight == currentMode.physicalHeight
+                    }
+                } else {
+                    modes?.toList().orEmpty()
+                }
+                val maxRefreshMode = matchingResolutionModes.maxByOrNull { it.refreshRate }
                 if (maxRefreshMode != null && maxRefreshMode.refreshRate > 60f) {
                     val params = window.attributes
                     params.preferredDisplayModeId = maxRefreshMode.modeId
@@ -344,6 +354,11 @@ class MainActivity : FragmentActivity() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         WorkspaceMemoryKeepAliveCoordinator.onSystemTrimMemory(level)
+    }
+
+    override fun onDestroy() {
+        WorkspaceMemoryKeepAliveCoordinator.detachActivityContextsAll()
+        super.onDestroy()
     }
 }
 
@@ -1060,24 +1075,33 @@ fun AntigravityPulseApp(
         }
     }
 
-    // Silent daily background auto-update check (24h throttle via SharedPreferences). Never shows
-    // a blocking dialog on startup; only posts an update notification while the app is backgrounded.
+    // Silent daily background auto-update check (24h throttle via SharedPreferences).
+    // Only stamps lastCheckMs after a successful fetch so transient network failures retry cleanly.
     LaunchedEffect(Unit) {
         val updatePrefs = context.getSharedPreferences(UPDATE_CHECK_PREFS_NAME, Context.MODE_PRIVATE)
         val lastCheckMs = updatePrefs.getLong(KEY_LAST_UPDATE_CHECK_MS, 0L)
         val isAutoCheckDue = System.currentTimeMillis() - lastCheckMs >= AUTO_UPDATE_CHECK_INTERVAL_MS
         if (!isAutoCheckDue) return@LaunchedEffect
         try {
-            val latestRelease = UpdateChecker.checkForUpdate(context)
-            updatePrefs.edit().putLong(KEY_LAST_UPDATE_CHECK_MS, System.currentTimeMillis()).apply()
-            if (latestRelease != null && UpdateChecker.isNewer(latestRelease.tagName, BuildConfig.VERSION_NAME)) {
-                if (!PulseNotificationManager.isAppInForeground) {
-                    PulseNotificationManager.showAppActivityNotification(
-                        context = context,
-                        title = "Update Available",
-                        body = "Antigravity Pulse ${latestRelease.versionName} is ready to install. Tap to review the release."
-                    )
+            when (val result = UpdateChecker.checkForUpdateDetailed(context)) {
+                is UpdateCheckResult.Success -> {
+                    updatePrefs.edit().putLong(KEY_LAST_UPDATE_CHECK_MS, System.currentTimeMillis()).apply()
+                    val latestRelease = result.release
+                    if (UpdateChecker.isNewer(latestRelease.tagName, BuildConfig.VERSION_NAME)) {
+                        if (!PulseNotificationManager.isAppInForeground) {
+                            PulseNotificationManager.showAppActivityNotification(
+                                context = context,
+                                title = "Update Available",
+                                body = "Antigravity Pulse v${latestRelease.versionName} is ready to install. Tap to review the release."
+                            )
+                        } else {
+                            antigravityViewModel.recordWebViewBridgeEvent(
+                                "Update v${latestRelease.versionName} available — open Settings → App Updates"
+                            )
+                        }
+                    }
                 }
+                is UpdateCheckResult.Error -> Unit
             }
         } catch (_: Exception) {
         }
@@ -2328,12 +2352,15 @@ private fun KeepAliveWorkspaceSlot(
         modifier = Modifier
             .fillMaxSize()
             .zIndex(if (isActive) 1f else 0f)
-            .then(if (isActive) Modifier else Modifier.clearAndSetSemantics {})
-            .drawWithContent {
+            .then(
                 if (isActive) {
-                    drawContent()
+                    Modifier
+                } else {
+                    Modifier
+                        .clearAndSetSemantics {}
+                        .drawWithContent {}
                 }
-            }
+            )
     ) {
         content()
     }

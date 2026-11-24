@@ -240,7 +240,6 @@ fun MovableFloatingControlPanel(
                         )
                     }
                     .onSizeChanged { handleSize = it }
-                    .shadow(if (isLightMode) 5.dp else 3.dp, handleShape, ambientColor = Color.Black.copy(alpha = 0.28f))
                     .frostedGlass(
                         shape = handleShape,
                         baseColor = if (isLightMode) surface else elevated,

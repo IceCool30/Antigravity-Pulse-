@@ -454,6 +454,12 @@ object PulseBrowserManager {
         }
     }
 
+    fun detachActivityContextsAll() {
+        tabWebViews.values.forEach { wv ->
+            WebViewOfflineCacheHelper.detachActivityContext(wv)
+        }
+    }
+
     fun releaseAllTabsFromRam() {
         saveAllStateBackups()
         val entries = tabWebViews.entries.toList()
@@ -554,10 +560,11 @@ object PulseBrowserManager {
         onPageEvent: (String) -> Unit
     ): WebView {
         domLagBoosterActive = domLagBooster
-        val appContext = context.applicationContext
         val tabState = _tabs.value.firstOrNull { it.id == tabId } ?: activeTab()
 
-        val webView = tabWebViews[tabId] ?: WebView(appContext).apply {
+        val webView = tabWebViews[tabId]?.also {
+            WebViewOfflineCacheHelper.attachActivityContext(it, context)
+        } ?: WebViewOfflineCacheHelper.createDisplayAwareWebView(context).apply {
             try {
                 WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             } catch (_: Exception) {
@@ -606,7 +613,7 @@ object PulseBrowserManager {
                     safeBrowsingEnabled = true
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    offscreenPreRaster = true
+                    offscreenPreRaster = false
                 }
                 layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
                 textZoom = 100
@@ -766,7 +773,6 @@ object PulseBrowserManager {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     refreshTabHistoryState(tabId, view)
-                    flushCookiesAll()
                     val isErrorPage = url.isNullOrBlank() ||
                         url.startsWith("chrome-error:", ignoreCase = true) ||
                         url.startsWith("about:", ignoreCase = true)
@@ -793,10 +799,6 @@ object PulseBrowserManager {
                         tabPendingRestoreScroll.remove(tabId)?.let { (sx, sy) ->
                             WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
                         }
-                        view?.postDelayed({
-                            captureSnapshotIfHealthy(tabId, view)
-                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { tabStateBackups[tabId] = it }
-                        }, 650L)
                     } else {
                         updateTab(tabId) { it.copy(loadProgress = 100) }
                     }

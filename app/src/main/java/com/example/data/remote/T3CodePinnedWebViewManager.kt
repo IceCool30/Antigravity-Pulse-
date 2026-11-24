@@ -593,6 +593,11 @@ object T3CodePinnedWebViewManager {
         }
     }
 
+    fun detachActivityContext() {
+        WebViewOfflineCacheHelper.detachActivityContext(pinnedWebView)
+        WebViewOfflineCacheHelper.detachActivityContext(_popupWebViewState.value)
+    }
+
     fun releaseFromRam() {
         val oldView = pinnedWebView ?: return
         saveStateBackup()
@@ -715,11 +720,11 @@ object T3CodePinnedWebViewManager {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createPopupWebView(
-        appContext: Context,
+        uiContext: Context,
         onPageEvent: (String) -> Unit
     ): WebView {
         dismissPopupWebView()
-        return WebView(appContext).apply {
+        return WebViewOfflineCacheHelper.createDisplayAwareWebView(uiContext).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -735,9 +740,6 @@ object T3CodePinnedWebViewManager {
             // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
             // invalidates the WebView on every scroll frame.
             isVerticalScrollBarEnabled = false
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                settings.offscreenPreRaster = true
-            }
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -758,7 +760,7 @@ object T3CodePinnedWebViewManager {
                     safeBrowsingEnabled = true
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    offscreenPreRaster = true
+                    offscreenPreRaster = false
                 }
                 useWideViewPort = true
                 loadWithOverviewMode = false
@@ -873,8 +875,9 @@ object T3CodePinnedWebViewManager {
     ): WebView {
         ensureEnvironmentsLoaded(context)
         domLagBoosterActive = domLagBooster
-        val appContext = context.applicationContext
-        val webView = pinnedWebView ?: WebView(appContext).apply {
+        val webView = pinnedWebView?.also {
+            WebViewOfflineCacheHelper.attachActivityContext(it, context)
+        } ?: WebViewOfflineCacheHelper.createDisplayAwareWebView(context).apply {
             try {
                 WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
             } catch (_: Exception) {
@@ -926,7 +929,7 @@ object T3CodePinnedWebViewManager {
                     safeBrowsingEnabled = true
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    offscreenPreRaster = true
+                    offscreenPreRaster = false
                 }
                 layoutAlgorithm = WebSettings.LayoutAlgorithm.NORMAL
                 textZoom = 100
@@ -954,7 +957,7 @@ object T3CodePinnedWebViewManager {
                     resultMsg: Message?
                 ): Boolean {
                     val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                    val popupView = createPopupWebView(appContext, onPageEvent)
+                    val popupView = createPopupWebView(this@apply.context, onPageEvent)
                     _popupWebViewState.value = popupView
                     transport.webView = popupView
                     resultMsg.sendToTarget()
@@ -1110,7 +1113,6 @@ object T3CodePinnedWebViewManager {
                     super.onPageFinished(view, url)
                     _pageLoadProgress.value = 100
                     refreshCanGoBack(view)
-                    flushCookies()
                     val isErrorPage = url.isNullOrBlank() ||
                         url.startsWith("chrome-error:", ignoreCase = true) ||
                         url.startsWith("about:", ignoreCase = true)
@@ -1138,10 +1140,6 @@ object T3CodePinnedWebViewManager {
                             pendingRestoreScroll = null
                             WebViewOfflineCacheHelper.restoreScrollOffset(view, sx, sy)
                         }
-                        view?.postDelayed({
-                            captureLatestSnapshotIfHealthy(view)
-                            WebViewOfflineCacheHelper.captureStateBackup(view)?.let { savedStateBackup = it }
-                        }, 650L)
                     }
                     if (!isErrorPage) {
                         applyLagBooster(domLagBoosterActive)

@@ -26,24 +26,25 @@ object UpdateInstaller {
     }
 
     /**
-     * Builds the [Intent.ACTION_VIEW] install intent for the verified APK file.
-     * Returns null when no handler can be resolved.
+     * Builds the [Intent.ACTION_VIEW] install intent for the verified APK file using
+     * [Intent.setDataAndType] (never calling `type = ...` after setting `data`, which clears `data`).
      */
     fun buildInstallIntent(context: Context, apkFile: File): Intent? {
+        if (!apkFile.exists() || apkFile.length() <= 0L) return null
         val uri = FileProvider.getUriForFile(
             context,
             "${BuildConfig.APPLICATION_ID}.fileprovider",
             apkFile
         )
-        return Intent(Intent.ACTION_VIEW, uri).apply {
-            type = APK_MIME_TYPE
+        return Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, APK_MIME_TYPE)
             addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
             )
         }
     }
 
-    /** Deep-links the user into the Android 12+ "Install unknown apps" settings screen. */
+    /** Deep-links the user into the Android "Install unknown apps" settings screen. */
     fun launchUnknownSourcesSettings(context: Context) {
         val intent = Intent(
             Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,

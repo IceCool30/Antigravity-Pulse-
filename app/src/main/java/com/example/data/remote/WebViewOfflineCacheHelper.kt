@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import android.content.Context
+import android.content.MutableContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.ConnectivityManager
@@ -64,6 +65,32 @@ object WebViewOfflineCacheHelper {
             mainHandler.post(block)
         } else {
             mainHandler.postDelayed(block, delayMs)
+        }
+    }
+
+    /**
+     * Instantiates a [WebView] backed by a [MutableContextWrapper] initialized with the active
+     * Activity/UI [context] so Chromium receives the real display refresh rate (90/120Hz VSync),
+     * touch slop, and fling velocity physics instead of falling back to non-UI `applicationContext`.
+     */
+    fun createDisplayAwareWebView(context: Context): WebView {
+        return WebView(MutableContextWrapper(context))
+    }
+
+    /** Rebinds a pinned [WebView]'s [MutableContextWrapper] to the current active UI [context]. */
+    fun attachActivityContext(webView: WebView, context: Context) {
+        val wrapper = webView.context as? MutableContextWrapper ?: return
+        if (wrapper.baseContext !== context) {
+            wrapper.baseContext = context
+        }
+    }
+
+    /** Rebinds a pinned [WebView] back to `applicationContext` on Activity destroy to prevent leaks. */
+    fun detachActivityContext(webView: WebView?) {
+        val wrapper = webView?.context as? MutableContextWrapper ?: return
+        val appCtx = wrapper.applicationContext ?: return
+        if (wrapper.baseContext !== appCtx) {
+            wrapper.baseContext = appCtx
         }
     }
 

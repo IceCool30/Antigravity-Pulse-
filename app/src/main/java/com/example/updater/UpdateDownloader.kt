@@ -1,15 +1,17 @@
 package com.example.updater
 
 import android.content.Context
-import java.net.HttpURLConnection
-import java.net.URL
+import android.os.SystemClock
 import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.security.MessageDigest
 
 enum class UpdateDownloadStatus {
@@ -34,16 +36,19 @@ data class UpdateDownloadState(
 )
 
 /**
- * Downloads the candidate APK from GitHub Releases into the app cache dir, verifies its SHA-256
- * against the release `SHA256SUMS.txt` entry, and only then reports success for install.
+ * Downloads the candidate APK from GitHub Releases into `cacheDir/update/`, computes and verifies
+ * its SHA-256 against the release `SHA256SUMS.txt` (or manifest checksum) before allowing install.
  */
 object UpdateDownloader {
 
     private val _state = MutableStateFlow(UpdateDownloadState(UpdateDownloadStatus.IDLE, null, null))
-    val state: StateFlow<UpdateDownloadState> = _state
+    val state: StateFlow<UpdateDownloadState> = _state.asStateFlow()
 
-    private const val DOWNLOAD_TIMEOUT_MS = 60_000L
-    private const val IO_BUFFER_SIZE = 8192
+    private const val CONNECT_TIMEOUT_MS = 20_000
+    private const val DOWNLOAD_TIMEOUT_MS = 90_000
+    private const val IO_BUFFER_SIZE = 65_536
+    private const val MAX_REDIRECTS = 6
+    private const val PROGRESS_EMIT_INTERVAL_MS = 100L
 
     /** Resets the download state machine (e.g. after a user taps Retry). */
     fun reset() {
@@ -56,51 +61,157 @@ object UpdateDownloader {
      */
     suspend fun downloadApk(context: Context, release: LatestRelease): File = withContext(Dispatchers.IO) {
         val apkFileName = "Antigravity-Pulse-${release.tagName}.apk"
-        // The fallback manifest supplies the hash directly; GitHub Releases supplies the
-        // SHA256SUMS.txt asset. Both are verified before the APK is handed to the installer.
-        val expectedSha256 = release.sha256?.takeIf { it.matches(Regex("(?i)[a-f0-9]{64}")) }
-            ?: release.sha256SumsUrl?.let { url ->
-                downloadText(context, url)?.let { parseSha256Sums(it, apkFileName) }
-            }
-            ?: throw IllegalStateException("Release ${release.tagName} did not include a verifiable SHA-256 checksum.")
         val apkUrl = release.apkAssetUrl
-            ?: throw IllegalStateException("Release ${release.tagName} did not include a downloadable APK asset.")
+            ?: failAndThrow("Release ${release.tagName} did not include a downloadable APK asset.")
 
-        val apkFile = File(File(context.cacheDir, "update"), apkFileName).apply { delete() }
+        if (!UpdateChecker.isTrustedUpdateHost(apkUrl)) {
+            failAndThrow("Blocked untrusted download host for $apkFileName.")
+        }
+
+        // Resolve expected SHA-256 either directly from manifest or from SHA256SUMS.txt
+        val expectedSha256 = release.sha256?.takeIf { it.matches(Regex("(?i)[a-f0-9]{64}")) }
+            ?: release.sha256SumsUrl?.let { sumsUrl ->
+                if (!UpdateChecker.isTrustedUpdateHost(sumsUrl)) {
+                    failAndThrow("Blocked untrusted checksum host.")
+                }
+                downloadText(sumsUrl)?.let { parseSha256Sums(it, apkFileName) }
+            }
+            ?: failAndThrow("Release ${release.tagName} did not include a verifiable SHA-256 checksum.")
+
+        val updateDir = File(context.cacheDir, "update")
+        if (!updateDir.exists() && !updateDir.mkdirs()) {
+            failAndThrow("Could not create local update cache directory.")
+        }
+        // Clean up any stale older APKs in cacheDir/update before writing the new file
+        updateDir.listFiles()?.forEach { existing ->
+            if (existing.isFile && existing.name.endsWith(".apk", ignoreCase = true)) {
+                existing.delete()
+            }
+        }
+
+        val apkFile = File(updateDir, apkFileName)
+        val tempFile = File(updateDir, "$apkFileName.part").apply { delete() }
+
         _state.value = UpdateDownloadState(
             status = UpdateDownloadStatus.DOWNLOADING,
-            progress = UpdateDownloadProgress(bytesDownloaded = 0, totalBytes = release.apkSizeBytes ?: 0, percent = 0),
+            progress = UpdateDownloadProgress(
+                bytesDownloaded = 0L,
+                totalBytes = release.apkSizeBytes ?: 0L,
+                percent = 0
+            ),
+            error = null,
+            downloadedFile = null
+        )
+
+        val actualSha256 = try {
+            downloadFileAndHash(
+                urlString = apkUrl,
+                targetFile = tempFile,
+                fallbackTotalBytes = release.apkSizeBytes ?: -1L
+            )
+        } catch (err: Exception) {
+            tempFile.delete()
+            failAndThrow(err.message ?: "Download interrupted. Please retry.", err)
+        }
+
+        _state.value = UpdateDownloadState(
+            status = UpdateDownloadStatus.VERIFYING,
+            progress = null,
+            error = null,
+            downloadedFile = null
+        )
+
+        if (actualSha256 != expectedSha256.trim().lowercase()) {
+            tempFile.delete()
+            failAndThrow("SHA-256 checksum mismatch for $apkFileName. Refusing to install an unverified APK.")
+        }
+
+        if (apkFile.exists()) {
+            apkFile.delete()
+        }
+        if (!tempFile.renameTo(apkFile)) {
+            tempFile.copyTo(apkFile, overwrite = true)
+            tempFile.delete()
+        }
+
+        _state.value = UpdateDownloadState(
+            status = UpdateDownloadStatus.SUCCESS,
+            progress = UpdateDownloadProgress(
+                bytesDownloaded = apkFile.length(),
+                totalBytes = apkFile.length(),
+                percent = 100
+            ),
             error = null,
             downloadedFile = apkFile
         )
-        downloadFile(context, apkUrl, apkFile)
-
-        _state.value = UpdateDownloadState(status = UpdateDownloadStatus.VERIFYING, progress = null, error = null, downloadedFile = apkFile)
-        val actualSha256 = sha256Hex(apkFile)
-        if (actualSha256 != expectedSha256.trim().lowercase()) {
-            apkFile.delete()
-            _state.value = UpdateDownloadState(
-                status = UpdateDownloadStatus.FAILED,
-                progress = null,
-                error = "SHA-256 checksum mismatch for $apkFileName. Refusing to install an unverified APK.",
-                downloadedFile = apkFile
-            )
-            throw IllegalStateException("SHA-256 checksum mismatch for $apkFileName.")
-        }
-
-        _state.value = UpdateDownloadState(status = UpdateDownloadStatus.SUCCESS, progress = null, error = null, downloadedFile = apkFile)
         return@withContext apkFile
     }
 
-    private suspend fun downloadFile(context: Context, urlString: String, targetFile: File) {
-        val connection = URL(urlString).openConnection() as HttpURLConnection
-        connection.requestMethod = "GET"
-        connection.connectTimeout = 15_000
-        connection.readTimeout = DOWNLOAD_TIMEOUT_MS.toInt()
-        connection.setRequestProperty("Accept", UpdateChecker.APK_MIME_TYPE)
-        connection.setRequestProperty("User-Agent", "AntigravityPulse/${BuildConfig.VERSION_NAME} (Android-AutoUpdate)")
-        val totalBytes = connection.contentLengthLong
-        connection.connect()
+    private fun failAndThrow(message: String, cause: Throwable? = null): Nothing {
+        _state.value = UpdateDownloadState(
+            status = UpdateDownloadStatus.FAILED,
+            progress = null,
+            error = message,
+            downloadedFile = null
+        )
+        throw IllegalStateException(message, cause)
+    }
+
+    private fun openFollowingRedirects(
+        initialUrl: String,
+        acceptHeader: String
+    ): HttpURLConnection {
+        var currentUrl = initialUrl
+        repeat(MAX_REDIRECTS + 1) {
+            if (!UpdateChecker.isTrustedUpdateHost(currentUrl)) {
+                throw SecurityException("Blocked redirect to untrusted host: $currentUrl")
+            }
+            val connection = URL(currentUrl).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.readTimeout = DOWNLOAD_TIMEOUT_MS
+            connection.instanceFollowRedirects = false
+            connection.useCaches = false
+            connection.setRequestProperty("Accept", acceptHeader)
+            connection.setRequestProperty(
+                "User-Agent",
+                "AntigravityPulse/${BuildConfig.VERSION_NAME} (Android-AutoUpdate)"
+            )
+            val code = connection.responseCode
+            if (code in listOf(301, 302, 303, 307, 308)) {
+                val location = connection.getHeaderField("Location")
+                connection.disconnect()
+                if (location.isNullOrBlank()) {
+                    throw IllegalStateException("HTTP $code redirect without Location header")
+                }
+                currentUrl = URL(URL(currentUrl), location).toString()
+                return@repeat
+            }
+            if (code !in 200..299) {
+                connection.disconnect()
+                throw IllegalStateException("Download server returned HTTP $code")
+            }
+            return connection
+        }
+        throw IllegalStateException("Too many redirects while downloading update")
+    }
+
+    private fun downloadFileAndHash(
+        urlString: String,
+        targetFile: File,
+        fallbackTotalBytes: Long
+    ): String {
+        val connection = openFollowingRedirects(
+            initialUrl = urlString,
+            acceptHeader = "application/octet-stream, */*"
+        )
+        val headerLength = connection.contentLengthLong
+        val totalBytes = if (headerLength > 0L) headerLength else fallbackTotalBytes
+        val digest = MessageDigest.getInstance("SHA-256")
+        var totalDownloaded = 0L
+        var lastEmittedPercent = -1
+        var lastEmitAtMs = 0L
+
         try {
             connection.inputStream.use { input ->
                 FileOutputStream(targetFile).use { output ->
@@ -109,35 +220,55 @@ object UpdateDownloader {
                         val bytesRead = input.read(buffer)
                         if (bytesRead < 0) break
                         output.write(buffer, 0, bytesRead)
-                        val bytesDownloaded = bytesRead.toLong()
-                        val percent = if (totalBytes > 0) ((bytesDownloaded * 100) / totalBytes).toInt().coerceIn(0, 100) else 0
-                        _state.value = UpdateDownloadState(
-                            status = UpdateDownloadStatus.DOWNLOADING,
-                            progress = UpdateDownloadProgress(bytesDownloaded, totalBytes, percent),
-                            error = null,
-                            downloadedFile = targetFile
-                        )
+                        digest.update(buffer, 0, bytesRead)
+                        totalDownloaded += bytesRead
+
+                        val percent = if (totalBytes > 0L) {
+                            ((totalDownloaded * 100L) / totalBytes).toInt().coerceIn(0, 100)
+                        } else {
+                            0
+                        }
+                        val nowMs = SystemClock.elapsedRealtime()
+                        if (percent != lastEmittedPercent &&
+                            (nowMs - lastEmitAtMs >= PROGRESS_EMIT_INTERVAL_MS || percent == 100)
+                        ) {
+                            lastEmittedPercent = percent
+                            lastEmitAtMs = nowMs
+                            _state.value = UpdateDownloadState(
+                                status = UpdateDownloadStatus.DOWNLOADING,
+                                progress = UpdateDownloadProgress(
+                                    bytesDownloaded = totalDownloaded,
+                                    totalBytes = totalBytes.coerceAtLeast(totalDownloaded),
+                                    percent = percent
+                                ),
+                                error = null,
+                                downloadedFile = null
+                            )
+                        }
                     }
+                    output.flush()
                 }
             }
         } finally {
             connection.disconnect()
         }
+        if (totalDownloaded <= 0L) {
+            throw IllegalStateException("Downloaded APK was empty (0 bytes).")
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private suspend fun downloadText(context: Context, urlString: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val connection = URL(urlString).openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 15_000
-            connection.readTimeout = DOWNLOAD_TIMEOUT_MS.toInt()
-            connection.setRequestProperty("Accept", "text/plain")
-            connection.setRequestProperty("User-Agent", "AntigravityPulse/${BuildConfig.VERSION_NAME} (Android-AutoUpdate)")
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-            connection.disconnect()
-            text
+    private fun downloadText(urlString: String): String? {
+        return try {
+            val connection = openFollowingRedirects(
+                initialUrl = urlString,
+                acceptHeader = "text/plain, */*"
+            )
+            try {
+                connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } finally {
+                connection.disconnect()
+            }
         } catch (_: Exception) {
             null
         }
@@ -145,31 +276,25 @@ object UpdateDownloader {
 
     /**
      * Parses a `SHA256SUMS.txt` blob (`<sha256>  <filename>`) and returns the expected hash for the
-     * requested APK file name.
+     * requested APK file name (falling back to the sole `.apk` entry if the file name matches loosely).
      */
     internal fun parseSha256Sums(sumsText: String, apkFileName: String): String? {
+        var fallbackApkHash: String? = null
+        var apkEntryCount = 0
         for (rawLine in sumsText.lineSequence()) {
             val line = rawLine.trim()
             if (line.isEmpty()) continue
             val tokens = line.split(Regex("\\s+"))
             if (tokens.size < 2) continue
             val hash = tokens[0].trim().lowercase()
+            if (!hash.matches(Regex("[a-f0-9]{64}"))) continue
             val name = tokens[1].trim().trimStart('*')
-            if (name == apkFileName) return hash
-        }
-        return null
-    }
-
-    private fun sha256Hex(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(IO_BUFFER_SIZE)
-            while (true) {
-                val bytesRead = input.read(buffer)
-                if (bytesRead < 0) break
-                digest.update(buffer, 0, bytesRead)
+            if (name.equals(apkFileName, ignoreCase = true)) return hash
+            if (name.endsWith(".apk", ignoreCase = true)) {
+                apkEntryCount += 1
+                fallbackApkHash = hash
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return if (apkEntryCount == 1) fallbackApkHash else null
     }
 }
