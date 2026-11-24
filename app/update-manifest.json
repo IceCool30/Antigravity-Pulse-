@@ -1,11 +1,11 @@
 {
-  "tagName": "v1.2.4",
-  "versionName": "1.2.4",
-  "publishedAt": "2026-11-24T00:00:00Z",
-  "releaseNotes": "Scroll jank elimination across all web workspaces: disabled Android 12+ stretch overscroll and native overlay scrollbars, stripped backdrop-filter/background-attachment:fixed from the DOM lag booster CSS, stopped painting inactive workspace slots, and made the remote agent observer read textContent instead of forcing layout.",
-  "apkUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.4/Antigravity-Pulse-v1.2.4.apk",
-  "apkSizeBytes": 41958541,
-  "sha256": "b916dfa3c6193958a58064afa346cb7951f831e89293ff8cff0c645e7f13d6dc",
-  "sha256SumsUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.4/SHA256SUMS.txt",
-  "releaseNotesUrl": "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.4"
+    "tagName":  "v1.2.5",
+    "versionName":  "1.2.5",
+    "publishedAt":  "2026-11-24T20:00:43Z",
+    "releaseNotes":  "Fixed in-app auto-updater end-to-end (4-tier lookup, progress tracking, SHA-256 verification, and Android installer launch) and eliminated scrolling lag across all 8 web workspaces with display-aware WebView contexts and zero-wildcard CSS.",
+    "apkUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.5/Antigravity-Pulse-v1.2.5.apk",
+    "apkSizeBytes":  41974925,
+    "sha256":  "958fd56f01782b78b49e3ccd2f2952adc88a8c1ad98a6516535e542fac3d9cff",
+    "sha256SumsUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.5/SHA256SUMS.txt",
+    "releaseNotesUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.5"
 }

@@ -132,7 +132,7 @@ try {
     [System.IO.File]::WriteAllText($manifestPath, $manifestJson, (New-Object System.Text.UTF8Encoding($false)))
 
     if ($SkipPublish) {
-        Write-Host "`nSkipPublish set — local signed artifacts and manifest are ready in dist\ and app\update-manifest.json." -ForegroundColor Yellow
+        Write-Host "`nSkipPublish set -- local signed artifacts and manifest are ready in dist\ and app\update-manifest.json." -ForegroundColor Yellow
         return
     }
 
