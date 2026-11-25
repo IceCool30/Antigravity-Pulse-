@@ -1,11 +1,11 @@
 {
-    "tagName":  "v1.2.6",
-    "versionName":  "1.2.6",
-    "publishedAt":  "2026-11-25T04:06:44Z",
-    "releaseNotes":  "Fixed post-sign-in WebView scroll and touch lag with touch-safe Compose hosting, isolated root recompositions, active-only IME resizing, early SPA/GPU CSS optimization, and quieter background WebView pausing.",
-    "apkUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.6/Antigravity-Pulse-v1.2.6.apk",
-    "apkSizeBytes":  41974929,
-    "sha256":  "8ef0b6f4ff7689fbc538aeb0cafa9f6f5ad52ecbc54b4704f4a52f420ce07204",
-    "sha256SumsUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.6/SHA256SUMS.txt",
-    "releaseNotesUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.6"
+    "tagName":  "v1.2.7",
+    "versionName":  "1.2.7",
+    "publishedAt":  "2026-11-25T11:18:12Z",
+    "releaseNotes":  "Fixed unreadable in-app notification banners, added Google Sign-In browser fallback and reliable auth state sync, and removed Firestore labels from Cloud Sync.",
+    "apkUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.7/Antigravity-Pulse-v1.2.7.apk",
+    "apkSizeBytes":  41974925,
+    "sha256":  "ef66e98aa9c30738f05537dddb83724cb9b0ba28457ea38ae1dd4a49f961519f",
+    "sha256SumsUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/download/v1.2.7/SHA256SUMS.txt",
+    "releaseNotesUrl":  "https://github.com/IceCool30/Antigravity-Pulse-/releases/tag/v1.2.7"
 }
