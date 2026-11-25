@@ -4,6 +4,17 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.6] - 2026-11-25
+
+### Fixed & Optimized
+- **Post-Sign-In Touch, Scroll & UI Responsiveness Across All 8 Workspaces**:
+  - Added `PinnedWebViewHost` (`TouchSafeWebViewContainer`) calling `requestDisallowInterceptTouchEvent(true)` on active `ACTION_DOWN` / `ACTION_MOVE` touches and clipping compositor invalidations with `Modifier.graphicsLayer { clip = true }`, preventing Compose `AndroidViewHolder` pointer arbitration from stalling inner `overflow-y: auto` and horizontal SPA containers after authentication.
+  - Skipped draw and semantics passes (`drawWithContent {}`) plus O(1) touch short-circuiting for inactive `PulseBrowserScreen` tabs and removed redundant background layers behind WebViews.
+  - Eliminated root Compose recomposition storms by isolating per-tab, browser progress (`1..100%`), `canGoBack`, and RAM status collectors (`WorkspaceBackHandler`, `WorkspaceBottomNavigationBar`, `WorkspaceKeepAliveServiceObserver`, `FullscreenMovableControlPanelHost`, and `PulseBrowserManager.activeTabCanGoBack`).
+  - Replaced root `WindowInsets.safeDrawing` resizing with `WindowInsets.systemBars.union(WindowInsets.displayCutout)` + `.consumeWindowInsets(innerPadding)` and applied `Modifier.imePadding()` only on the active workspace slot, stopping hidden WebViews from relayouting during keyboard animations.
+  - Stopped calling `resumeTimers()` when hiding background WebViews inside `applyWindowAttachedVisibility`, debounced `resumeTimersOnce` (`250 ms`), unified `configureScrollResponsiveWebView` (removing `setInitialScale(0)` relayout quirks), and enabled `databaseEnabled = true` in `PulseBrowserManager`.
+  - Restored zero-wildcard GPU optimizations (`backdrop-filter: none !important`, `background-attachment: scroll !important`, `scroll-behavior: auto !important`) in `LAG_BOOSTER_CSS`, added SPA `pushState` / `replaceState` / `popstate` re-injection and `onPageCommitVisible` early styling across all WebView managers, preserved `width=device-width` SPA layouts in `injectMobileLayoutFix`, and throttled/tail-bounded `attachAgentObserver` with `requestIdleCallback`.
+
 ## [1.2.5] - 2026-11-24
 
 ### Fixed & Optimized

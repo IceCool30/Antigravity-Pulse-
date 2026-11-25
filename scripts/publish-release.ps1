@@ -15,6 +15,7 @@
 param(
     [string]$KeystoreDir = "C:\Users\john.bisong\Keys\antigravity-pulse",
     [string]$ExpectedCertPrefix = "b37898ed",
+    [string]$ReleaseSummary = "Fixed post-sign-in WebView scroll and touch lag with touch-safe Compose hosting, isolated root recompositions, active-only IME resizing, early SPA/GPU CSS optimization, and quieter background WebView pausing.",
     [switch]$SkipPublish
 )
 
@@ -53,7 +54,7 @@ try {
     Write-Step "3. Resolving release keystore"
     $keystorePath = $env:KEYSTORE_PATH
     if ([string]::IsNullOrWhiteSpace($keystorePath)) {
-        $candidate = Get-ChildItem -Path $KeystoreDir -Include *.jks, *.keystore -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        $candidate = Get-ChildItem -Path (Join-Path $KeystoreDir "*") -Include *.jks, *.keystore -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -eq $candidate) {
             throw "No .jks or .keystore file found in $KeystoreDir and KEYSTORE_PATH is not set."
         }
@@ -72,11 +73,11 @@ try {
     $gradleCmd = if (Test-Path (Join-Path $RepoRoot "gradlew.bat")) { ".\gradlew.bat" } else { "gradle" }
 
     Write-Step "4. Running unit tests (:app:testDebugUnitTest)"
-    & $gradleCmd :app:testDebugUnitTest
+    & $gradleCmd :app:testDebugUnitTest --no-daemon
     if ($LASTEXITCODE -ne 0) { throw "Unit tests failed with exit code $LASTEXITCODE" }
 
     Write-Step "5. Building signed release APK (:app:assembleRelease)"
-    & $gradleCmd :app:assembleRelease
+    & $gradleCmd :app:assembleRelease --no-daemon
     if ($LASTEXITCODE -ne 0) { throw "assembleRelease failed with exit code $LASTEXITCODE" }
 
     $builtApk = Join-Path $RepoRoot "app\build\outputs\apk\release\app-release.apk"
@@ -85,18 +86,27 @@ try {
     }
 
     Write-Step "6. Verifying APK signing certificate matches $ExpectedCertPrefix..."
-    $keytoolCmd = Get-Command keytool -ErrorAction SilentlyContinue
-    if ($null -ne $keytoolCmd) {
-        $certOutput = (& keytool -printcert -jarfile $builtApk 2>&1) | Out-String
-        if ($certOutput -match "SHA256:\s*([0-9A-Fa-f:]+)") {
-            $certSha256 = ($Matches[1] -replace ":", "").ToLowerInvariant()
-            Write-Host "APK signing cert SHA-256: $certSha256"
-            if (-not $certSha256.StartsWith($ExpectedCertPrefix.ToLowerInvariant())) {
-                throw "Signing cert mismatch! Expected prefix $ExpectedCertPrefix, got $certSha256. Refusing to publish."
-            }
-        } else {
-            Write-Warning "Could not parse SHA256 from keytool output; verify apksigner manually."
+    $certOutput = $null
+    $sdkBuildTools = Join-Path $env:LOCALAPPDATA "Android\Sdk\build-tools"
+    $apksigner = Get-ChildItem -Path $sdkBuildTools -Recurse -Filter "apksigner.bat" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
+    if (-not [string]::IsNullOrWhiteSpace($apksigner)) {
+        $certOutput = (& $apksigner verify --print-certs $builtApk 2>&1) | Out-String
+    } else {
+        $keytoolCmd = Get-Command keytool -ErrorAction SilentlyContinue
+        if ($null -ne $keytoolCmd) {
+            $certOutput = (& keytool -printcert -jarfile $builtApk 2>&1) | Out-String
         }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($certOutput) -and $certOutput -match "SHA-?256(?:\s+digest)?:\s*([0-9A-Fa-f:]+)") {
+        $certSha256 = ($Matches[1] -replace ":", "").ToLowerInvariant()
+        Write-Host "APK signing cert SHA-256: $certSha256"
+        if (-not $certSha256.StartsWith($ExpectedCertPrefix.ToLowerInvariant())) {
+            throw "Signing cert mismatch! Expected prefix $ExpectedCertPrefix, got $certSha256. Refusing to publish."
+        }
+    } else {
+        Write-Warning "Could not parse SHA-256 from apksigner/keytool output."
     }
 
     Write-Step "7. Preparing dist/$apkFileName and dist/SHA256SUMS.txt"
@@ -115,7 +125,7 @@ try {
 
     Write-Step "8. Updating app/update-manifest.json"
     $publishedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    $manifestSummary = "Fixed in-app auto-updater end-to-end (4-tier lookup, progress tracking, SHA-256 verification, and Android installer launch) and eliminated scrolling lag across all 8 web workspaces with display-aware WebView contexts and zero-wildcard CSS."
+    $manifestSummary = $ReleaseSummary
     $manifestObj = [ordered]@{
         tagName         = $tagName
         versionName     = $versionName
@@ -140,7 +150,7 @@ try {
     git add app/update-manifest.json app/build.gradle.kts CHANGELOG.md RELEASE_NOTES.md scripts/publish-release.ps1
     $stagedDiff = git diff --cached --name-only
     if (-not [string]::IsNullOrWhiteSpace($stagedDiff)) {
-        git commit -m "release: $tagName (in-app updater + smooth workspace scrolling)"
+        git commit -m "release: $tagName"
     }
     $existingTag = git tag -l $tagName
     if ([string]::IsNullOrWhiteSpace($existingTag)) {
@@ -152,9 +162,9 @@ try {
     Write-Step "10. Extracting $tagName section from RELEASE_NOTES.md and publishing GitHub Release"
     $notesRaw = Get-Content (Join-Path $RepoRoot "RELEASE_NOTES.md") -Raw
     $notesFile = Join-Path $distDir "release-notes-$tagName.md"
-    $firstSection = ($notesRaw -split "(?m)^# Antigravity Pulse v1\.2\.3")[0].Trim()
-    if ([string]::IsNullOrWhiteSpace($firstSection)) {
-        $firstSection = $manifestSummary
+    $firstSection = $manifestSummary
+    if ($notesRaw -match "(?ms)\A(# Antigravity Pulse .*?)(?=\r?\n---\r?\n\r?\n# Antigravity Pulse |\r?\n# Antigravity Pulse |\z)") {
+        $firstSection = $Matches[1].Trim()
     }
     [System.IO.File]::WriteAllText($notesFile, $firstSection + "`n", (New-Object System.Text.UTF8Encoding($false)))
 

@@ -1,3 +1,25 @@
+# Antigravity Pulse v1.2.6 Release Notes
+
+**Antigravity Pulse v1.2.6** fixes post-sign-in scroll freezes, sluggish touch handling, keyboard resize lag, and GPU compositor bottlenecks across all 8 web workspaces (Antigravity Remote, T3 Code, Google AI Studio, Gemini, GitHub, Vercel, Supabase, and Pulse Browser).
+
+It upgrades cleanly in place over v1.2.5 (and earlier v1.x releases) with no uninstall and no data loss.
+
+---
+
+## What's Fixed in v1.2.6
+
+### 1. Responsive Inner-Container Touch & Smooth 60/120Hz Scrolling
+- **Touch-Safe WebView Hosting (`PinnedWebViewHost`)**: Calls `requestDisallowInterceptTouchEvent(true)` during active drags so Compose never stalls inner `overflow-y: auto` or horizontal code/diff scroll containers once signed into an app, while clipping WebView compositor bounds cleanly.
+- **Zero-`*` GPU Blur & Parallax Cleanup**: Restores targeted zero-wildcard `backdrop-filter: none !important`, `background-attachment: scroll !important`, and `scroll-behavior: auto !important` rules with early `onPageCommitVisible` injection and SPA route hooks (`pushState` / `replaceState` / `popstate`).
+- **Preserved Responsive Viewports**: Stops overwriting `html, body` dimensions on apps that already declare `width=device-width`, and removes `setInitialScale(0)` relayout quirks across all WebViews.
+
+### 2. Zero Root Recomposition & Background Contention
+- **Isolated State Collectors**: High-frequency browser tab load ticks (`1..100%`), back-navigation state, and workspace RAM indicators no longer recompose the root `Scaffold` or hidden WebViews.
+- **Active-Only Keyboard Resizing**: Soft keyboard (`IME`) insets now resize only the currently visible active workspace instead of forcing background WebViews to relayout on every keyboard frame.
+- **Cleaner Background Pausing & Agent Observer**: Hiding background WebViews no longer wakes shared Blink timers, inactive `PulseBrowserScreen` tabs skip draw/semantics passes, and the remote agent observer uses `requestIdleCallback` with tail-bounded DOM reads.
+
+---
+
 # Antigravity Pulse v1.2.5 Release Notes
 
 **Antigravity Pulse v1.2.5** fixes in-app update fetching/downloading/installing and eliminates scrolling slowness across all 8 web workspaces (Antigravity Remote, T3 Code, Google AI Studio, Gemini, GitHub, Vercel, Supabase, and Pulse Browser).
