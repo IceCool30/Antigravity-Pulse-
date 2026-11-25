@@ -66,8 +66,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -75,7 +77,11 @@ import com.example.R
 import com.example.data.cloud.CloudSyncRepository
 import com.example.data.cloud.attemptAutoSignIn
 import com.example.data.cloud.authStateFlow
+import com.example.data.cloud.checkPendingGoogleSignInResult
+import com.example.data.cloud.findActivity
+import com.example.data.cloud.onGoogleBrowserSignInClicked
 import com.example.data.cloud.onGoogleSignInClicked
+import com.example.data.cloud.safeFirebaseAuthOrNull
 import com.example.data.cloud.signOutFromGoogle
 import com.example.data.local.AntigravityDao
 import com.example.data.local.ServerProfileEntity
@@ -86,9 +92,9 @@ import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
 import com.example.viewmodel.AuthenticatedCloudSyncViewModel
 import com.example.viewmodel.CloudUiState
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.flow.flowOf
 
 @Composable
 fun StorageAndCloudSyncScreen(
@@ -114,23 +120,64 @@ fun StorageAndCloudSyncScreen(
     val errorColor = appearance.errorColor
     val isFrostedGlass = appearance.isFrostedGlassEnabled
 
-    val scope = rememberCoroutineScope()
+    val fallbackScope = rememberCoroutineScope()
+    val authScope = remember(context, fallbackScope) {
+        (context.findActivity() as? LifecycleOwner)?.lifecycleScope ?: fallbackScope
+    }
     val credentialManager = remember { CredentialManager.create(context) }
-    val currentUser by Firebase.auth.authStateFlow()
-        .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
+    val firebaseAuth = remember(context) { safeFirebaseAuthOrNull(context) }
+    val observedUser by remember(firebaseAuth) {
+        firebaseAuth?.authStateFlow() ?: flowOf(null)
+    }.collectAsStateWithLifecycle(initialValue = firebaseAuth?.currentUser)
+    var confirmedAuthUser by remember { mutableStateOf<FirebaseUser?>(firebaseAuth?.currentUser) }
+    val currentUser = observedUser ?: confirmedAuthUser
 
     var authError by remember { mutableStateOf<String?>(null) }
+    var authHint by remember { mutableStateOf<String?>(null) }
     var isSigningIn by remember { mutableStateOf(false) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        if (currentUser == null) {
-            attemptAutoSignIn(
+    LaunchedEffect(observedUser?.uid) {
+        if (observedUser != null) {
+            confirmedAuthUser = observedUser
+            isSigningIn = false
+            authError = null
+            authHint = null
+        } else if (firebaseAuth?.currentUser == null) {
+            confirmedAuthUser = null
+        }
+    }
+
+    LaunchedEffect(firebaseAuth) {
+        if (currentUser == null && firebaseAuth != null) {
+            checkPendingGoogleSignInResult(
                 context = context,
-                credentialManager = credentialManager,
-                onAuthSuccess = { authError = null },
-                onUnauthenticated = {},
-                scope = scope
+                scope = authScope,
+                onAuthUserConfirmed = { signedUser ->
+                    confirmedAuthUser = signedUser
+                    authError = null
+                    authHint = null
+                    isSigningIn = false
+                },
+                onAuthError = { msg ->
+                    isSigningIn = false
+                    authError = msg
+                },
+                onNoPending = {
+                    attemptAutoSignIn(
+                        context = context,
+                        credentialManager = credentialManager,
+                        onAuthSuccess = {
+                            authError = null
+                            authHint = null
+                        },
+                        onUnauthenticated = {},
+                        scope = authScope,
+                        onAuthUserConfirmed = { signedUser ->
+                            confirmedAuthUser = signedUser
+                        }
+                    )
+                }
             )
         }
     }
@@ -320,7 +367,7 @@ fun StorageAndCloudSyncScreen(
             }
         }
 
-        // 2. Google Cloud Sync Card (Firestore Backup for Remote Hosts & Reusable Prompts)
+        // 2. Google Cloud Sync Card (Cloud Backup for Remote Hosts & Reusable Prompts)
         item {
             val user = currentUser
             if (user == null) {
@@ -352,7 +399,7 @@ fun StorageAndCloudSyncScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Google Cloud Sync (Firestore)",
+                                text = "Google Cloud Sync",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = accent
@@ -372,6 +419,13 @@ fun StorageAndCloudSyncScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = errorColor
                             )
+                        } else if (authHint != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = authHint.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = accent
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -379,6 +433,7 @@ fun StorageAndCloudSyncScreen(
                             onClick = {
                                 isSigningIn = true
                                 authError = null
+                                authHint = null
                                 onGoogleSignInClicked(
                                     context = context,
                                     credentialManager = credentialManager,
@@ -387,8 +442,16 @@ fun StorageAndCloudSyncScreen(
                                         isSigningIn = false
                                         authError = msg
                                     },
-                                    scope = scope,
-                                    onAuthCancelled = { isSigningIn = false }
+                                    scope = authScope,
+                                    onAuthCancelled = { hintMsg ->
+                                        isSigningIn = false
+                                        authHint = hintMsg
+                                    },
+                                    onAuthUserConfirmed = { signedUser ->
+                                        confirmedAuthUser = signedUser
+                                        authError = null
+                                        authHint = null
+                                    }
                                 )
                             },
                             enabled = !isSigningIn,
@@ -412,6 +475,39 @@ fun StorageAndCloudSyncScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                isSigningIn = true
+                                authError = null
+                                authHint = null
+                                onGoogleBrowserSignInClicked(
+                                    context = context,
+                                    onAuthSuccess = { isSigningIn = false },
+                                    onAuthError = { msg ->
+                                        isSigningIn = false
+                                        authError = msg
+                                    },
+                                    scope = authScope,
+                                    onAuthUserConfirmed = { signedUser ->
+                                        confirmedAuthUser = signedUser
+                                        authError = null
+                                        authHint = null
+                                    }
+                                )
+                            },
+                            enabled = !isSigningIn,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("google_browser_sign_in_button")
+                        ) {
+                            Text(
+                                text = "Sign in via Browser",
+                                color = accent,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
@@ -447,10 +543,11 @@ fun StorageAndCloudSyncScreen(
                             onInsertPromptIntoRemote(promptText)
                         },
                         onSignOut = {
+                            confirmedAuthUser = null
                             signOutFromGoogle(
                                 context = context,
                                 credentialManager = credentialManager,
-                                scope = scope,
+                                scope = authScope,
                                 onBeforeSignOut = onBeforeSignOut
                             )
                         }
@@ -787,7 +884,7 @@ private fun AuthenticatedCloudSyncPanel(
 
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Save your frequently used Antigravity instructions to Firestore and insert them into Remote in one tap.",
+                    text = "Save your frequently used Antigravity instructions to Google Cloud and insert them into Remote in one tap.",
                     style = MaterialTheme.typography.bodySmall,
                     color = secondaryFg
                 )

@@ -1,3 +1,25 @@
+# Antigravity Pulse v1.2.7 Release Notes
+
+**Antigravity Pulse v1.2.7** fixes the unreadable in-app notification banner, fixes Google Sign-In not sticking or syncing after account selection, and removes the Firestore label from Cloud Sync.
+
+It upgrades cleanly in place over v1.2.6 (and earlier v1.x releases) with no uninstall and no data loss.
+
+---
+
+## What's Fixed in v1.2.7
+
+### 1. Readable In-App Notification Banner
+- **High-Contrast Status Pill**: Fixed the green-on-green status banner caused by `EmeraldOnline` crossing the frosted-glass light threshold. Status banners now use the theme card surface with crisp foreground text, an emerald dot, and a clear `Dismiss` chip.
+
+### 2. Reliable Google Sign-In Sync & Browser Fallback
+- **Automatic Fallback & Clear Diagnostics**: When Play Services Credential Manager fails to mint a token, the app surfaces the diagnostic message and falls back to Firebase browser OAuth instead of silently dropping back to the sign-in button.
+- **Browser Sign-In Option & Session Sync**: Added a **Sign in via Browser** button, pending OAuth recovery, `NonCancellable` token sign-in, and immediate auth state syncing in Cloud Sync.
+
+### 3. Cleaner Cloud Sync UI
+- Removed the `(Firestore)` and `Firestore` text from Cloud Sync screens.
+
+---
+
 # Antigravity Pulse v1.2.6 Release Notes
 
 **Antigravity Pulse v1.2.6** fixes post-sign-in scroll freezes, sluggish touch handling, keyboard resize lag, and GPU compositor bottlenecks across all 8 web workspaces (Antigravity Remote, T3 Code, Google AI Studio, Gemini, GitHub, Vercel, Supabase, and Pulse Browser).

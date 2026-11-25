@@ -155,8 +155,8 @@ import com.example.BuildConfig
 import com.example.data.cloud.authStateFlow
 import com.example.data.cloud.clearFirestoreLocalCache
 import com.example.data.cloud.configureAppCheck
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
+import com.example.data.cloud.safeFirebaseAuthOrNull
+import kotlinx.coroutines.flow.flowOf
 import com.example.data.local.AntigravityDatabase
 import com.example.data.local.ServerProfileEntity
 import com.example.data.remote.AiStudioPinnedWebViewManager
@@ -1208,9 +1208,11 @@ fun AntigravityPulseApp(
     // Global cross-user isolation guard: detects live sign-outs/revocations AND cold-start
     // account switches (User A -> User B) via persisted lastSignedInUid, wiping all local data
     // before the new user can access any previous session state.
-    val currentAuthUser by Firebase.auth.authStateFlow()
-        .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
-    var lastObservedAuthUid by remember { mutableStateOf(Firebase.auth.currentUser?.uid) }
+    val firebaseAuth = remember(context) { safeFirebaseAuthOrNull(context) }
+    val currentAuthUser by remember(firebaseAuth) {
+        firebaseAuth?.authStateFlow() ?: flowOf(null)
+    }.collectAsStateWithLifecycle(initialValue = firebaseAuth?.currentUser)
+    var lastObservedAuthUid by remember { mutableStateOf(firebaseAuth?.currentUser?.uid) }
 
     LaunchedEffect(currentAuthUser?.uid) {
         val newUid = currentAuthUser?.uid
@@ -1492,39 +1494,10 @@ fun AntigravityPulseApp(
                         ) {
                             val bannerText = statusBanner
                             if (bannerText != null) {
-                                val bannerGreen = activeTheme.successColor
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                                        .frostedGlass(
-                                            shape = RoundedCornerShape(14.dp),
-                                            baseColor = if (activeTheme.isLightMode) surface else bannerGreen.copy(alpha = 0.18f),
-                                            tintColor = bannerGreen,
-                                            borderColor = bannerGreen,
-                                            enabled = activeTheme.isFrostedGlassEnabled,
-                                            fillAlpha = if (activeTheme.isLightMode) 0.94f else 0.26f,
-                                            tintAlpha = 0.10f,
-                                            borderAlpha = if (activeTheme.isLightMode) 0.65f else 0.45f
-                                        )
-                                        .clickable { antigravityViewModel.clearBanner() }
-                                        .padding(horizontal = 12.dp, vertical = 7.dp)
-                                        .testTag("status_feedback_banner"),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = bannerText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = bannerGreen,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(
-                                        text = "Dismiss",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = fg
-                                    )
-                                }
+                                StatusFeedbackBanner(
+                                    bannerText = bannerText,
+                                    onDismiss = { antigravityViewModel.clearBanner() }
+                                )
                             }
                         }
 
@@ -2442,6 +2415,74 @@ private fun FullscreenMovableControlPanelHost(
         },
         onOpenSettings = onOpenSettings
     )
+}
+
+@Composable
+internal fun StatusFeedbackBanner(
+    bannerText: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val activeTheme = LocalAppearanceSettings.current
+    val surface = activeTheme.surfaceColor
+    val elevated = activeTheme.elevatedSurfaceColor
+    val fg = activeTheme.foregroundColor
+    val accent = activeTheme.accentColor
+    val bannerGreen = activeTheme.successColor
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .frostedGlass(
+                shape = RoundedCornerShape(14.dp),
+                // Keep baseColor on the theme card surface so FrostedGlass preserves dark-mode contrast
+                baseColor = surface,
+                tintColor = bannerGreen,
+                borderColor = bannerGreen,
+                enabled = activeTheme.isFrostedGlassEnabled,
+                fillAlpha = if (activeTheme.isLightMode) 0.96f else 0.90f,
+                tintAlpha = 0.08f,
+                borderAlpha = if (activeTheme.isLightMode) 0.72f else 0.58f
+            )
+            .clickable(onClick = onDismiss)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("status_feedback_banner"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(bannerGreen)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = bannerText,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = fg,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "Dismiss",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = accent,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(elevated.copy(alpha = 0.85f))
+                .padding(horizontal = 8.dp, vertical = 3.dp)
+        )
+    }
 }
 
 @Composable

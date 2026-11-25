@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
@@ -1671,6 +1672,86 @@ class ExampleRobolectricTest {
         com.example.data.remote.PulseBrowserManager.closeTab(extraTab.id)
         com.example.data.remote.PulseBrowserManager.selectTab(originalTabs.first().id)
         assertFalse(com.example.data.remote.PulseBrowserManager.activeTabCanGoBack.value)
+    }
+
+    @Test
+    fun `StatusFeedbackBanner uses readable theme surface and contrast in Dark and Light modes`() {
+        var dismissedCount = 0
+        val darkAppearance = AppearanceSettings(themeMode = AntigravityThemeMode.DARK)
+        // Confirm why the old green-on-green banner failed: EmeraldOnline on EmeraldOnline has < 1.5 contrast
+        assertTrue(
+            com.example.ui.theme.contrastRatio(darkAppearance.successColor, darkAppearance.successColor) < 4.5f
+        )
+        // Confirm fg on surface meets WCAG AA contrast in both Dark and Light modes
+        assertTrue(
+            com.example.ui.theme.contrastRatio(darkAppearance.foregroundColor, darkAppearance.surfaceColor) >= 10f
+        )
+        val lightAppearance = AppearanceSettings(themeMode = AntigravityThemeMode.LIGHT)
+        assertTrue(
+            com.example.ui.theme.contrastRatio(lightAppearance.foregroundColor, lightAppearance.surfaceColor) >= 10f
+        )
+
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = darkAppearance) {
+                StatusFeedbackBanner(
+                    bannerText = "Reloading Antigravity Remote...",
+                    onDismiss = { dismissedCount++ }
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("status_feedback_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Reloading Antigravity Remote...").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Dismiss").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("status_feedback_banner").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(1, dismissedCount)
+    }
+
+    @Test
+    fun `Google credential failure classifier triggers web fallback for Play Services errors and rejects blank silent cancel`() {
+        val noCred = androidx.credentials.exceptions.NoCredentialException("No credentials available")
+        val noCredDecision = com.example.data.cloud.classifyGoogleCredentialFailure(noCred)
+        assertTrue(noCredDecision.shouldFallbackToWebOAuth)
+        assertNotNull(noCredDecision.userVisibleMessage)
+
+        val unknownErr = androidx.credentials.exceptions.GetCredentialUnknownException("[28444] Developer console is not set up correctly.")
+        val unknownDecision = com.example.data.cloud.classifyGoogleCredentialFailure(unknownErr)
+        assertTrue(unknownDecision.shouldFallbackToWebOAuth)
+        assertTrue(unknownDecision.userVisibleMessage!!.contains("28444"))
+
+        val reauthCancel = androidx.credentials.exceptions.GetCredentialCancellationException("[16] Account reauth failed.")
+        val reauthDecision = com.example.data.cloud.classifyGoogleCredentialFailure(reauthCancel)
+        assertTrue(reauthDecision.shouldFallbackToWebOAuth)
+        assertNotNull(reauthDecision.userVisibleMessage)
+
+        val userCancel = androidx.credentials.exceptions.GetCredentialCancellationException("activity is cancelled by the user.")
+        val userCancelDecision = com.example.data.cloud.classifyGoogleCredentialFailure(userCancel)
+        assertFalse(userCancelDecision.shouldFallbackToWebOAuth)
+        assertNotNull(userCancelDecision.userVisibleMessage)
+    }
+
+    @Test
+    fun `StorageAndCloudSyncScreen removes Firestore inscription and offers browser fallback sign in`() {
+        composeTestRule.setContent {
+            AntigravityPulseTheme(appearance = AppearanceSettings()) {
+                com.example.ui.screens.StorageAndCloudSyncScreen(
+                    dao = database.dao(),
+                    localProfiles = emptyList(),
+                    onConnectHostUrl = { _, _, _ -> },
+                    onInsertPromptIntoRemote = {},
+                    onOpenAddHostModal = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("cloud_auth_card").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Google Cloud Sync").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Firestore", substring = true, ignoreCase = true).assertDoesNotExist()
+        composeTestRule.onNodeWithTag("google_sign_in_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("google_browser_sign_in_button").assertIsDisplayed()
     }
 }
 

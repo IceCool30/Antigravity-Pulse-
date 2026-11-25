@@ -4,6 +4,17 @@ All notable changes to **Antigravity Pulse** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.7] - 2026-11-25
+
+### Fixed
+- **Readable In-App Notification Banner (`StatusFeedbackBanner`)**:
+  - Switched the banner's frosted glass `baseColor` from `EmeraldOnline` (`#10B981`, whose luminance crossed `FrostedGlass`'s light-surface threshold and rendered an 88% solid green fill behind green text) to the active theme `surface` color with high-contrast `fg` message text, an emerald indicator dot, and a distinct `Dismiss` pill.
+- **Google Sign-In Sync & Browser Fallback**:
+  - Added failure classification (`classifyGoogleCredentialFailure`) so Play Services credential/reauth errors fall back automatically to Firebase browser OAuth (`OAuthProvider("google.com")`) instead of silently resetting to `"Sign in with Google"`.
+  - Added a direct **"Sign in via Browser"** option and `pendingAuthResult` recovery on return, executed token sign-in under `NonCancellable` on the Activity lifecycle scope, emitted initial auth state immediately in `authStateFlow()`, and guarded `clearFirestoreLocalCache` with a `Mutex`.
+- **Cleaner Cloud Sync Copy**:
+  - Removed `"Firestore"` inscriptions from user-facing Cloud Sync cards and prompt snippet text.
+
 ## [1.2.6] - 2026-11-25
 
 ### Fixed & Optimized

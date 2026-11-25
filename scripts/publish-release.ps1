@@ -15,7 +15,7 @@
 param(
     [string]$KeystoreDir = "C:\Users\john.bisong\Keys\antigravity-pulse",
     [string]$ExpectedCertPrefix = "b37898ed",
-    [string]$ReleaseSummary = "Fixed post-sign-in WebView scroll and touch lag with touch-safe Compose hosting, isolated root recompositions, active-only IME resizing, early SPA/GPU CSS optimization, and quieter background WebView pausing.",
+    [string]$ReleaseSummary = "Fixed unreadable in-app notification banners, added Google Sign-In browser fallback and reliable auth state sync, and removed Firestore labels from Cloud Sync.",
     [switch]$SkipPublish
 )
 
