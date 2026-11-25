@@ -1611,5 +1611,66 @@ class ExampleRobolectricTest {
         com.example.data.remote.WebViewOfflineCacheHelper.keepTimersAliveWithoutResumingHidden(webView)
         assertEquals(android.view.View.GONE, webView.visibility)
     }
+
+    @Test
+    fun `TouchSafeWebViewContainer requests parent disallow intercept when active and drops touches when hidden`() {
+        var disallowInterceptCalls = 0
+        val trackingParent = object : android.widget.FrameLayout(context) {
+            override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+                super.requestDisallowInterceptTouchEvent(disallowIntercept)
+                if (disallowIntercept) disallowInterceptCalls++
+            }
+        }
+        val container = com.example.ui.components.TouchSafeWebViewContainer(context)
+        val webView = android.webkit.WebView(context)
+        com.example.ui.components.attachWebViewToContainer(container, webView)
+        trackingParent.addView(container)
+
+        com.example.data.remote.WebViewOfflineCacheHelper.configureScrollResponsiveWebView(webView)
+        assertEquals(android.view.View.LAYER_TYPE_NONE, webView.layerType)
+        assertFalse(webView.isNestedScrollingEnabled)
+        assertEquals(android.view.View.OVER_SCROLL_NEVER, webView.overScrollMode)
+        assertFalse(webView.isVerticalScrollBarEnabled)
+        assertFalse(webView.isHorizontalScrollBarEnabled)
+
+        com.example.data.remote.WebViewOfflineCacheHelper.applyWindowAttachedVisibility(webView, isActive = true)
+        assertTrue(container.isActiveWorkspace)
+        assertEquals(android.view.View.VISIBLE, container.visibility)
+
+        val downEvent = android.view.MotionEvent.obtain(0L, 10L, android.view.MotionEvent.ACTION_DOWN, 50f, 50f, 0)
+        try {
+            assertFalse(container.onInterceptTouchEvent(downEvent))
+            container.dispatchTouchEvent(downEvent)
+            assertTrue(disallowInterceptCalls >= 1)
+        } finally {
+            downEvent.recycle()
+        }
+
+        val callsWhileActive = disallowInterceptCalls
+        com.example.data.remote.WebViewOfflineCacheHelper.applyWindowAttachedVisibility(webView, isActive = false)
+        assertFalse(container.isActiveWorkspace)
+        assertEquals(android.view.View.GONE, container.visibility)
+        assertEquals(android.view.View.GONE, webView.visibility)
+
+        val inactiveEvent = android.view.MotionEvent.obtain(0L, 20L, android.view.MotionEvent.ACTION_DOWN, 50f, 50f, 0)
+        try {
+            assertTrue(container.onInterceptTouchEvent(inactiveEvent))
+            assertFalse(container.dispatchTouchEvent(inactiveEvent))
+            assertEquals(callsWhileActive, disallowInterceptCalls)
+        } finally {
+            inactiveEvent.recycle()
+        }
+    }
+
+    @Test
+    fun `PulseBrowserManager tracks activeTabCanGoBack safely across tab lifecycle`() {
+        val originalTabs = com.example.data.remote.PulseBrowserManager.tabs.value
+        assertFalse(com.example.data.remote.PulseBrowserManager.activeTabCanGoBack.value)
+        val extraTab = com.example.data.remote.PulseBrowserManager.openNewTab("https://example.com")
+        assertFalse(com.example.data.remote.PulseBrowserManager.activeTabCanGoBack.value)
+        com.example.data.remote.PulseBrowserManager.closeTab(extraTab.id)
+        com.example.data.remote.PulseBrowserManager.selectTab(originalTabs.first().id)
+        assertFalse(com.example.data.remote.PulseBrowserManager.activeTabCanGoBack.value)
+    }
 }
 

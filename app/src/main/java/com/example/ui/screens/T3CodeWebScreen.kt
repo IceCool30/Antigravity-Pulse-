@@ -79,8 +79,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.RetainedWebViewManager
 import com.example.data.remote.T3CodePinnedWebViewManager
 import com.example.data.remote.T3EnvironmentProfile
-import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
+import com.example.ui.components.PinnedWebViewHost
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppearanceSettings
 
@@ -436,23 +436,18 @@ fun T3CodeWebScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(bg)
                 .testTag("t3_code_pinned_webview_container")
         ) {
             key(rendererGeneration) {
-                AndroidView(
+                PinnedWebViewHost(
+                    isWorkspaceActive = isWorkspaceActive,
                     modifier = Modifier.fillMaxSize(),
-                    factory = { ctx ->
+                    webViewProvider = { ctx ->
                         T3CodePinnedWebViewManager.obtainPinnedWebView(
                             context = ctx,
                             domLagBooster = domLagBoosterEnabled,
                             onPageEvent = onStatusEvent
-                        ).also { wv ->
-                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                        }
-                    },
-                    update = { wv ->
-                        WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
+                        )
                     }
                 )
             }
@@ -547,14 +542,12 @@ fun T3CodeWebScreen(
                         }
                     }
                     HorizontalDivider(color = border)
-                    AndroidView(
+                    PinnedWebViewHost(
+                        isWorkspaceActive = true,
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth(),
-                        factory = {
-                            (activePopup.parent as? ViewGroup)?.removeView(activePopup)
-                            activePopup
-                        }
+                        webViewProvider = { activePopup }
                     )
                 }
             }

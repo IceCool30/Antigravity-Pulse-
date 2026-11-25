@@ -44,13 +44,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.AiStudioPinnedWebViewManager
 import com.example.data.remote.AiStudioWebSection
 import com.example.data.remote.RetainedWebViewManager
-import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
+import com.example.ui.components.PinnedWebViewHost
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppearanceSettings
@@ -265,25 +264,18 @@ fun AiStudioWebScreen(
                 .fillMaxWidth()
         ) {
             key(rendererGeneration) {
-                AndroidView(
-                    factory = { ctx ->
+                PinnedWebViewHost(
+                    isWorkspaceActive = isWorkspaceActive,
+                    modifier = Modifier.fillMaxSize(),
+                    testTag = "ai_studio_pinned_webview_container",
+                    webViewProvider = { ctx ->
                         AiStudioPinnedWebViewManager.obtainPinnedWebView(
                             context = ctx,
                             initialSection = activeSection,
                             domLagBooster = domLagBoosterEnabled,
                             onPageEvent = onStatusEvent
-                        ).also { wv ->
-                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                        }
-                    },
-                    update = { wv ->
-                        // Keep WebView permanently attached to window; toggle visibility/focus without reloading
-                        WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black)
-                        .testTag("ai_studio_pinned_webview_container")
+                        )
+                    }
                 )
             }
 

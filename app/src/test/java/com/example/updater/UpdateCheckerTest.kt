@@ -1,6 +1,7 @@
 package com.example.updater
 
 import com.example.data.remote.RetainedWebViewManager
+import com.example.data.remote.WebViewOfflineCacheHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -163,5 +164,29 @@ class UpdateCheckerTest {
     @Test
     fun `lag booster CSS avoids universal wildcard selector that stalls Blink scroll`() {
         assertFalse(RetainedWebViewManager.LAG_BOOSTER_CSS.contains("*"))
+        assertTrue(RetainedWebViewManager.LAG_BOOSTER_CSS.contains("backdrop-filter: none !important"))
+        assertTrue(RetainedWebViewManager.LAG_BOOSTER_CSS.contains("background-attachment: scroll !important"))
+        assertTrue(RetainedWebViewManager.LAG_BOOSTER_CSS.contains("scroll-behavior: auto !important"))
+    }
+
+    @Test
+    fun `buildLagBoosterScript safely quotes hyphenated style ids and supports SPA history hooks`() {
+        val enableScript = WebViewOfflineCacheHelper.buildLagBoosterScript(
+            enabled = true,
+            styleElementId = "antigravity-pulse-t3-dom-booster",
+            cssText = RetainedWebViewManager.LAG_BOOSTER_CSS
+        )
+        assertTrue(enableScript.contains("var id = \"antigravity-pulse-t3-dom-booster\""))
+        assertTrue(enableScript.contains("window.__agLagState[id] = true"))
+        assertTrue(enableScript.contains("pushState"))
+        assertTrue(enableScript.contains("popstate"))
+        assertFalse(enableScript.contains("__agLagBoosterActive_"))
+
+        val disableScript = WebViewOfflineCacheHelper.buildLagBoosterScript(
+            enabled = false,
+            styleElementId = "antigravity-pulse-t3-dom-booster",
+            cssText = RetainedWebViewManager.LAG_BOOSTER_CSS
+        )
+        assertTrue(disableScript.contains("window.__agLagState[\"antigravity-pulse-t3-dom-booster\"] = false"))
     }
 }

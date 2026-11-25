@@ -81,8 +81,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.draw.shadow
 import com.example.data.remote.BridgeTelemetry
 import com.example.data.remote.RetainedWebViewManager
-import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
+import com.example.ui.components.PinnedWebViewHost
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
 
@@ -267,24 +267,18 @@ fun RetainedWebViewBridgeScreen(
             if (!showNativeWelcome) {
                 // Full-bleed Memory-Pinned WebView Instance (only mounted once a remote host is active)
                 key(rendererGeneration) {
-                    AndroidView(
-                        factory = { context ->
+                    PinnedWebViewHost(
+                        isWorkspaceActive = isWorkspaceActive,
+                        modifier = Modifier.fillMaxSize(),
+                        testTag = "retained_webview_container",
+                        webViewProvider = { context ->
                             RetainedWebViewManager.obtainPinnedWebView(
                                 context = context,
                                 endpointUrl = effectiveEndpoint,
                                 domLagBooster = telemetry.domLagBoosterEnabled,
                                 onJsBridgeMessage = onJsBridgeEvent
-                            ).also { wv ->
-                                WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                            }
-                        },
-                        update = { wv ->
-                            // Keep WebView permanently attached to window; toggle visibility/focus without reloading
-                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                        },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .testTag("retained_webview_container")
+                            )
+                        }
                     )
                 }
 

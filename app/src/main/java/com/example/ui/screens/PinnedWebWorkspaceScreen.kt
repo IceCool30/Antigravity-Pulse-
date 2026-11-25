@@ -47,13 +47,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.DevWebWorkspace
 import com.example.data.remote.DevWebWorkspaceRegistry
 import com.example.data.remote.RetainedWebViewManager
-import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
+import com.example.ui.components.PinnedWebViewHost
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.LocalAppearanceSettings
@@ -316,23 +315,18 @@ fun PinnedWebWorkspaceScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(bg)
                 .testTag("${workspace.id}_pinned_webview_container")
         ) {
             key(workspace, rendererGeneration) {
-                AndroidView(
+                PinnedWebViewHost(
+                    isWorkspaceActive = isWorkspaceActive,
                     modifier = Modifier.fillMaxSize(),
-                    factory = { ctx ->
+                    webViewProvider = { ctx ->
                         session.obtainPinnedWebView(
                             context = ctx,
                             domLagBooster = domLagBoosterEnabled,
                             onPageEvent = onStatusEvent
-                        ).also { wv ->
-                            WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
-                        }
-                    },
-                    update = { wv ->
-                        WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, isWorkspaceActive)
+                        )
                     }
                 )
             }

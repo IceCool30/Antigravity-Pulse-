@@ -65,7 +65,15 @@ object RetainedWebViewManager {
      */
     const val LAG_BOOSTER_CSS: String =
         "html, body { -webkit-tap-highlight-color: transparent !important; " +
-            "scroll-behavior: auto !important; }"
+            "scroll-behavior: auto !important; } " +
+            "header, nav, footer, aside, dialog, mat-toolbar, [role=\"banner\"], " +
+            "[role=\"navigation\"], [role=\"toolbar\"], [role=\"dialog\"], " +
+            ".backdrop-blur, .backdrop-blur-xs, .backdrop-blur-sm, .backdrop-blur-md, " +
+            ".backdrop-blur-lg, .backdrop-blur-xl, .backdrop-blur-2xl, .backdrop-blur-3xl { " +
+            "backdrop-filter: none !important; -webkit-backdrop-filter: none !important; " +
+            "background-attachment: scroll !important; } " +
+            "main, [role=\"main\"], .overflow-y-auto, .overflow-x-auto, .overflow-auto, " +
+            ".overflow-y-scroll, .overflow-scroll { scroll-behavior: auto !important; }"
 
     @SuppressLint("StaticFieldLeak")
     private var pinnedWebView: WebView? = null
@@ -573,20 +581,7 @@ object RetainedWebViewManager {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            // Use default window layer pipeline (LAYER_TYPE_NONE) instead of forcing an offscreen
-            // hardware FBO layer, preventing DRM rendernode errors on software-rendered environments.
-            setLayerType(View.LAYER_TYPE_NONE, null)
-            isNestedScrollingEnabled = false
-            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
-            // through an offscreen stretch layer while dragging past either end of the page,
-            // which is a well-known source of dropped frames on mid-range mobile GPUs.
-            overScrollMode = View.OVER_SCROLL_NEVER
-            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
-            // invalidates the WebView on every scroll frame.
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
-            setInitialScale(0)
+            WebViewOfflineCacheHelper.configureScrollResponsiveWebView(this)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
                     // Keep renderer at IMPORTANT priority even when switching tabs or backgrounding
@@ -770,6 +765,19 @@ object RetainedWebViewManager {
                     // Zero-trust: strictly reject invalid/MITM TLS certificates (never call proceed())
                     handler?.cancel()
                     onJsBridgeMessage("Blocked untrusted SSL certificate for your protection.")
+                }
+
+                override fun onPageCommitVisible(view: WebView?, url: String?) {
+                    super.onPageCommitVisible(view, url)
+                    val isErrorPage = url.isNullOrBlank() ||
+                        url.startsWith("chrome-error:", ignoreCase = true) ||
+                        url.startsWith("about:", ignoreCase = true)
+                    if (!isErrorPage) {
+                        injectMobileLayoutFix(view)
+                        if (domLagBoosterActive) {
+                            injectDomLagOptimizer(view)
+                        }
+                    }
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
@@ -981,6 +989,8 @@ object RetainedWebViewManager {
             (function() {
               try {
                 var vp = document.querySelector('meta[name="viewport"]');
+                var vpContent = vp ? (vp.getAttribute('content') || '') : '';
+                var hasResponsiveViewport = !!vp && /width\s*=\s*device-width/i.test(vpContent);
                 if (!vp && document.head) {
                   vp = document.createElement('meta');
                   vp.name = 'viewport';
@@ -988,16 +998,18 @@ object RetainedWebViewManager {
                   document.head.appendChild(vp);
                 }
 
-                var styleId = 'antigravity-pulse-layout-fix';
-                var existing = document.getElementById(styleId);
-                if (!existing && document.head) {
-                  existing = document.createElement('style');
-                  existing.id = styleId;
-                  existing.textContent =
-                    'html, body { width: 100%; min-width: 0; margin-left: 0; margin-right: 0; ' +
-                    'padding-left: 0; padding-right: 0; box-sizing: border-box; ' +
-                    '-webkit-font-smoothing: antialiased; text-rendering: auto; }';
-                  document.head.appendChild(existing);
+                if (!hasResponsiveViewport && document.head) {
+                  var styleId = 'antigravity-pulse-layout-fix';
+                  var existing = document.getElementById(styleId);
+                  if (!existing) {
+                    existing = document.createElement('style');
+                    existing.id = styleId;
+                    existing.textContent =
+                      'html, body { width: 100%; min-width: 0; margin-left: 0; margin-right: 0; ' +
+                      'padding-left: 0; padding-right: 0; box-sizing: border-box; ' +
+                      '-webkit-font-smoothing: antialiased; text-rendering: auto; }';
+                    document.head.appendChild(existing);
+                  }
                 }
               } catch (e) {}
             })();
@@ -1161,8 +1173,12 @@ object RetainedWebViewManager {
                     var markTouch = function() { lastUserTouchAt = Date.now(); };
                     window.addEventListener('touchstart', markTouch, { passive: true, capture: true });
                     window.addEventListener('touchmove', markTouch, { passive: true, capture: true });
+                    window.addEventListener('pointerdown', markTouch, { passive: true, capture: true });
+                    window.addEventListener('pointermove', markTouch, { passive: true, capture: true });
                     window.addEventListener('scroll', markTouch, { passive: true, capture: true });
                     window.addEventListener('wheel', markTouch, { passive: true, capture: true });
+                    window.addEventListener('keydown', markTouch, { passive: true, capture: true });
+                    window.addEventListener('input', markTouch, { passive: true, capture: true });
                   } catch (e) {}
 
                   function isVisible(el) {
@@ -1181,12 +1197,13 @@ object RetainedWebViewManager {
                   function collectApprovalButtons() {
                     var found = [];
                     var nodes = document.querySelectorAll('button, [role="button"]');
-                    for (var i = 0; i < nodes.length; i++) {
+                    var startIdx = nodes.length > 60 ? (nodes.length - 60) : 0;
+                    for (var i = startIdx; i < nodes.length; i++) {
                       var el = nodes[i];
-                      if (!isVisible(el) || el.disabled) { continue; }
+                      if (el.disabled) { continue; }
                       var label = ((el.textContent || '') + '').trim();
                       if (label.length === 0 || label.length > 28) { continue; }
-                      if (/^(approve|accept|accept all|allow|allow once|allow always|run|run command|proceed|confirm)$/i.test(label)) {
+                      if (/^(approve|accept|accept all|allow|allow once|allow always|run|run command|proceed|confirm)$/i.test(label) && isVisible(el)) {
                         var ctx = '';
                         var parent = el.parentElement && el.parentElement.parentElement;
                         if (parent && parent.textContent) {
@@ -1202,16 +1219,17 @@ object RetainedWebViewManager {
                     var busy = document.querySelector('[aria-busy="true"], [role="progressbar"]');
                     if (busy && isVisible(busy)) { return true; }
                     var btns = document.querySelectorAll('button, [role="button"]');
-                    for (var i = 0; i < btns.length; i++) {
+                    var startIdx = btns.length > 60 ? (btns.length - 60) : 0;
+                    for (var i = startIdx; i < btns.length; i++) {
                       var b = btns[i];
-                      if (!isVisible(b) || b.disabled) { continue; }
+                      if (b.disabled) { continue; }
                       var meta = (
                         (b.getAttribute('aria-label') || '') + ' ' +
                         (b.getAttribute('title') || '') + ' ' +
                         (b.getAttribute('data-testid') || '') + ' ' +
                         (b.textContent || '')
                       ).trim();
-                      if (/\b(stop generating|stop response|stop agent|cancel generation|abort)\b/i.test(meta) || /^stop$/i.test(meta)) {
+                      if ((/\b(stop generating|stop response|stop agent|cancel generation|abort)\b/i.test(meta) || /^stop$/i.test(meta)) && isVisible(b)) {
                         return true;
                       }
                     }
@@ -1221,11 +1239,13 @@ object RetainedWebViewManager {
                   function extractLatestSnippet() {
                     try {
                       var blocks = document.querySelectorAll('main p, main li, [role="main"] p, article p, [class*="message" i] p, [class*="response" i] p, p');
-                      for (var i = blocks.length - 1; i >= 0; i--) {
+                      var minIdx = Math.max(0, blocks.length - 32);
+                      for (var i = blocks.length - 1; i >= minIdx; i--) {
                         var el = blocks[i];
-                        if (!isVisible(el)) { continue; }
-                        var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
-                        if (txt.length >= 18 && !/^ask anything/i.test(txt)) {
+                        var raw = el.textContent || '';
+                        if (raw.length < 18) { continue; }
+                        var txt = raw.replace(/\s+/g, ' ').trim();
+                        if (txt.length >= 18 && !/^ask anything/i.test(txt) && isVisible(el)) {
                           return txt.slice(0, 180);
                         }
                       }
@@ -1233,8 +1253,25 @@ object RetainedWebViewManager {
                     return 'Your remote Antigravity agent finished responding. Tap to view.';
                   }
 
+                  function readTailTranscript(scope) {
+                    if (!scope) { return { len: 0, tail: '' }; }
+                    var children = scope.children;
+                    if (!children || children.length <= 24) {
+                      var full = scope.textContent || '';
+                      return { len: full.length, tail: full.slice(-16384) };
+                    }
+                    var start = children.length - 12;
+                    var tailParts = [];
+                    for (var c = start; c < children.length; c++) {
+                      tailParts.push(children[c].textContent || '');
+                    }
+                    var tailStr = tailParts.join(' ').slice(-16384);
+                    return { len: (children.length * 1000) + tailStr.length, tail: tailStr };
+                  }
+
                   function inspectState(fromTimer) {
                     try {
+                      if (document.hidden) { return; }
                       var now = Date.now();
                       if (location.href !== lastHref) {
                         lastHref = location.href;
@@ -1247,8 +1284,8 @@ object RetainedWebViewManager {
                         return;
                       }
 
-                      // Never run DOM scans while the user is actively touching or scrolling
-                      if ((now - lastUserTouchAt) < 2500) {
+                      // Never run DOM scans while the user is actively touching, typing, or scrolling
+                      if ((now - lastUserTouchAt) < 3500) {
                         domDirty = true;
                         return;
                       }
@@ -1256,20 +1293,13 @@ object RetainedWebViewManager {
                       if (fromTimer && !domDirty && !isWorking && baselineCaptured) {
                         return;
                       }
-                      // Remember whether the DOM actually changed before clearing the flag, so
-                      // timer-only scans on an unchanged page can skip the expensive button walk
-                      // (querySelectorAll over every button plus a visibility check on each one).
                       var domChanged = domDirty;
                       domDirty = false;
 
-                      // Scan only the main content region when the app exposes one. Reading
-                      // `document.body.textContent` on a long agent conversation allocates a
-                      // multi-megabyte string (and triggers a major GC) on every scan; the main
-                      // region holds the growing transcript and is several times smaller.
                       var textScope = document.querySelector('main, [role="main"]') || document.body;
-                      var bodyText = (textScope && textScope.textContent) ? textScope.textContent : '';
-                      var textLen = bodyText.length;
-                      var workedCount = countWorkedMarkers(bodyText);
+                      var sample = readTailTranscript(textScope);
+                      var textLen = sample.len;
+                      var workedCount = countWorkedMarkers(sample.tail);
 
                       if (now < graceUntil) {
                         lastTextLen = textLen;
@@ -1347,17 +1377,25 @@ object RetainedWebViewManager {
                     } catch (e) {}
                   }
 
+                  function scheduleInspect(fromTimer) {
+                    if (typeof window.requestIdleCallback === 'function') {
+                      window.requestIdleCallback(function() { inspectState(fromTimer); }, { timeout: 600 });
+                    } else {
+                      inspectState(fromTimer);
+                    }
+                  }
+
                   var throttleTimer = null;
                   var observer = new MutationObserver(function() {
                     domDirty = true;
                     if (throttleTimer) { return; }
                     throttleTimer = setTimeout(function() {
                       throttleTimer = null;
-                      inspectState(false);
-                    }, 1400);
+                      scheduleInspect(false);
+                    }, 1800);
                   });
                   observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-                  setInterval(function() { inspectState(true); }, 2400);
+                  setInterval(function() { scheduleInspect(true); }, 3500);
                 }
 
                 if (document.body) {
@@ -1435,23 +1473,11 @@ object RetainedWebViewManager {
     fun injectDomLagOptimizer(webView: WebView? = pinnedWebView) {
         domLagBoosterActive = true
         val target = webView ?: return
-        // Preserve CSS animations so running spinners, progress rings, and thinking indicators
-        // stay fluid while eliminating 300ms tap delay and heavy smooth-scroll jank.
-        val js = """
-            (function() {
-              var id = 'antigravity-pulse-dom-booster';
-              var style = document.getElementById(id);
-              if (!style && document.head) {
-                style = document.createElement('style');
-                style.id = id;
-                document.head.appendChild(style);
-              }
-              if (style) {
-                style.textContent =
-                  '${RetainedWebViewManager.LAG_BOOSTER_CSS}';
-              }
-            })();
-        """.trimIndent()
+        val js = WebViewOfflineCacheHelper.buildLagBoosterScript(
+            enabled = true,
+            styleElementId = "antigravity-pulse-dom-booster",
+            cssText = LAG_BOOSTER_CSS
+        )
         target.post {
             try {
                 target.evaluateJavascript(js, null)
@@ -1463,12 +1489,11 @@ object RetainedWebViewManager {
     fun removeDomLagOptimizer(webView: WebView? = pinnedWebView) {
         domLagBoosterActive = false
         val target = webView ?: return
-        val js = """
-            (function() {
-              var el = document.getElementById('antigravity-pulse-dom-booster');
-              if (el && el.parentNode) { el.parentNode.removeChild(el); }
-            })();
-        """.trimIndent()
+        val js = WebViewOfflineCacheHelper.buildLagBoosterScript(
+            enabled = false,
+            styleElementId = "antigravity-pulse-dom-booster",
+            cssText = LAG_BOOSTER_CSS
+        )
         target.post {
             try {
                 target.evaluateJavascript(js, null)

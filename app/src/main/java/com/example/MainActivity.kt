@@ -51,6 +51,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -58,12 +59,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -313,6 +316,14 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    private fun keepVisibleWorkspaceTimersAlive() {
+        RetainedWebViewManager.keepTimersRunning()
+        AiStudioPinnedWebViewManager.keepTimersRunning()
+        T3CodePinnedWebViewManager.keepTimersRunning()
+        DevWebWorkspaceRegistry.keepTimersRunningAll()
+        PulseBrowserManager.keepTimersRunningAll()
+    }
+
     override fun onResume() {
         super.onResume()
         PulseNotificationManager.isAppInForeground = true
@@ -322,20 +333,12 @@ class MainActivity : FragmentActivity() {
             relockCallback?.invoke()
         }
         backgroundedAtElapsedMs = 0L
-        RetainedWebViewManager.keepTimersRunning()
-        AiStudioPinnedWebViewManager.keepTimersRunning()
-        T3CodePinnedWebViewManager.keepTimersRunning()
-        DevWebWorkspaceRegistry.keepTimersRunningAll()
-        PulseBrowserManager.keepTimersRunningAll()
+        keepVisibleWorkspaceTimersAlive()
     }
 
     override fun onPause() {
         PulseNotificationManager.isAppInForeground = false
-        RetainedWebViewManager.keepTimersRunning()
-        AiStudioPinnedWebViewManager.keepTimersRunning()
-        T3CodePinnedWebViewManager.keepTimersRunning()
-        DevWebWorkspaceRegistry.keepTimersRunningAll()
-        PulseBrowserManager.keepTimersRunningAll()
+        keepVisibleWorkspaceTimersAlive()
         super.onPause()
     }
 
@@ -343,11 +346,7 @@ class MainActivity : FragmentActivity() {
         PulseNotificationManager.isAppInForeground = false
         backgroundedAtElapsedMs = SystemClock.elapsedRealtime()
         WorkspaceMemoryKeepAliveCoordinator.saveAllStateBackups()
-        RetainedWebViewManager.keepTimersRunning()
-        AiStudioPinnedWebViewManager.keepTimersRunning()
-        T3CodePinnedWebViewManager.keepTimersRunning()
-        DevWebWorkspaceRegistry.keepTimersRunningAll()
-        PulseBrowserManager.keepTimersRunningAll()
+        keepVisibleWorkspaceTimersAlive()
         super.onStop()
     }
 
@@ -638,36 +637,6 @@ fun AntigravityPulseApp(
     val serverProfiles by antigravityViewModel.serverProfiles.collectAsStateWithLifecycle()
     val telemetry by antigravityViewModel.bridgeTelemetry.collectAsStateWithLifecycle()
     val statusBanner by antigravityViewModel.statusBanner.collectAsStateWithLifecycle()
-    val remoteCanGoBack by RetainedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
-    val aiStudioCanGoBack by AiStudioPinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
-    val activeAiStudioSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
-    val t3CanGoBack by T3CodePinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
-    val t3DesktopMode by T3CodePinnedWebViewManager.isDesktopModeState.collectAsStateWithLifecycle()
-    val t3Environments by T3CodePinnedWebViewManager.savedEnvironments.collectAsStateWithLifecycle()
-    val t3ActiveEnvId by T3CodePinnedWebViewManager.activeEnvironmentId.collectAsStateWithLifecycle()
-    val t3PopupWebView by T3CodePinnedWebViewManager.popupWebViewState.collectAsStateWithLifecycle()
-    val githubSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GITHUB) }
-    val vercelSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.VERCEL) }
-    val supabaseSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.SUPABASE) }
-    val geminiSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GEMINI) }
-    val githubCanGoBack by githubSession.canGoBackState.collectAsStateWithLifecycle()
-    val vercelCanGoBack by vercelSession.canGoBackState.collectAsStateWithLifecycle()
-    val supabaseCanGoBack by supabaseSession.canGoBackState.collectAsStateWithLifecycle()
-    val geminiCanGoBack by geminiSession.canGoBackState.collectAsStateWithLifecycle()
-    val githubActiveShortcut by githubSession.activeShortcutId.collectAsStateWithLifecycle()
-    val vercelActiveShortcut by vercelSession.activeShortcutId.collectAsStateWithLifecycle()
-    val supabaseActiveShortcut by supabaseSession.activeShortcutId.collectAsStateWithLifecycle()
-    val geminiActiveShortcut by geminiSession.activeShortcutId.collectAsStateWithLifecycle()
-    val githubDesktopMode by githubSession.isDesktopModeState.collectAsStateWithLifecycle()
-    val vercelDesktopMode by vercelSession.isDesktopModeState.collectAsStateWithLifecycle()
-    val supabaseDesktopMode by supabaseSession.isDesktopModeState.collectAsStateWithLifecycle()
-    val geminiDesktopMode by geminiSession.isDesktopModeState.collectAsStateWithLifecycle()
-    val browserTabs by PulseBrowserManager.tabs.collectAsStateWithLifecycle()
-    val browserActiveTabId by PulseBrowserManager.activeTabId.collectAsStateWithLifecycle()
-    val isBrowserBarVisible by PulseBrowserManager.isAddressBarVisible.collectAsStateWithLifecycle()
-    val activeBrowserTab = browserTabs.firstOrNull { it.id == browserActiveTabId } ?: browserTabs.first()
-    val pinnedRamCount by WorkspaceMemoryKeepAliveCoordinator.pinnedCount.collectAsStateWithLifecycle()
-    val workspaceRamStatuses by WorkspaceMemoryKeepAliveCoordinator.workspaceStatuses.collectAsStateWithLifecycle()
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(PulseTab.WEB_BRIDGE.ordinal) }
     // Window-Attached Lazy Workspace Stack: every visited web workspace stays mounted in the
@@ -1309,46 +1278,17 @@ fun AntigravityPulseApp(
         }
     }
 
-    // Keep the Play-compliant dataSync Foreground Service synced with user preference & pinned workspaces
-    LaunchedEffect(appearance.isBackgroundKeepAliveEnabled, pinnedRamCount) {
-        if (appearance.isBackgroundKeepAliveEnabled && pinnedRamCount > 0) {
-            if (!WorkspaceKeepAliveService.userPausedKeepAlive) {
-                WorkspaceKeepAliveService.startOrUpdate(context)
-            }
-        } else {
-            WorkspaceKeepAliveService.stop(context)
-        }
-    }
-    val isT3CodeBackActive = currentPulseTab == PulseTab.T3_CODE && (t3CanGoBack || t3PopupWebView != null)
-    val isAiStudioWebBackActive = currentPulseTab == PulseTab.AI_STUDIO && aiStudioCanGoBack
-    val isBrowserBackActive = currentPulseTab == PulseTab.BROWSER && activeBrowserTab.canGoBack
-    val activeDevBackSession = when (currentPulseTab) {
-        PulseTab.GITHUB -> if (githubCanGoBack) githubSession else null
-        PulseTab.VERCEL -> if (vercelCanGoBack) vercelSession else null
-        PulseTab.SUPABASE -> if (supabaseCanGoBack) supabaseSession else null
-        PulseTab.GEMINI -> if (geminiCanGoBack) geminiSession else null
-        else -> null
-    }
-    BackHandler(
-        enabled = !showAppearanceSheet &&
-            (showFloatingQuickMenu ||
-                selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal ||
-                remoteCanGoBack ||
-                isT3CodeBackActive ||
-                isAiStudioWebBackActive ||
-                isBrowserBackActive ||
-                activeDevBackSession != null)
-    ) {
-        when {
-            showFloatingQuickMenu -> showFloatingQuickMenu = false
-            isT3CodeBackActive -> T3CodePinnedWebViewManager.goBack()
-            isAiStudioWebBackActive -> AiStudioPinnedWebViewManager.goBack()
-            isBrowserBackActive -> PulseBrowserManager.goBackActiveTab()
-            activeDevBackSession != null -> activeDevBackSession.goBack()
-            selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal -> selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal
-            else -> RetainedWebViewManager.goBack()
-        }
-    }
+    WorkspaceKeepAliveServiceObserver(
+        enabled = appearance.isBackgroundKeepAliveEnabled
+    )
+    WorkspaceBackHandler(
+        currentPulseTab = currentPulseTab,
+        selectedTabIndex = selectedTabIndex,
+        showAppearanceSheet = showAppearanceSheet,
+        showFloatingQuickMenu = showFloatingQuickMenu,
+        onCloseFloatingQuickMenu = { showFloatingQuickMenu = false },
+        onNavigateToWebBridge = { selectedTabIndex = PulseTab.WEB_BRIDGE.ordinal }
+    )
 
     fun connectAndOpenRemoteHost(hostName: String, url: String, token: String) {
         val cleanUrl = url.trim()
@@ -1379,17 +1319,15 @@ fun AntigravityPulseApp(
         }
     }
 
-    val panelTabs = PulseTab.entries.mapIndexed { idx, tab ->
-        FloatingPanelTabItem(
-            index = idx,
-            title = stringResource(id = tab.titleRes),
-            icon = tab.icon,
-            testTag = tab.tag
-        )
-    }
-
-    val pinnedWorkspaceIds = remember(workspaceRamStatuses) {
-        workspaceRamStatuses.filter { it.isPinnedInRam }.map { it.id }.toSet()
+    val panelTabs = remember(context) {
+        PulseTab.entries.mapIndexed { idx, tab ->
+            FloatingPanelTabItem(
+                index = idx,
+                title = context.getString(tab.titleRes),
+                icon = tab.icon,
+                testTag = tab.tag
+            )
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1405,7 +1343,7 @@ fun AntigravityPulseApp(
             modifier = Modifier
                 .fillMaxSize()
                 .background(bg),
-            contentWindowInsets = WindowInsets.safeDrawing,
+            contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
             topBar = {
                 val barAnimMs = if (smoothAnimations) 160 else 0
                 AnimatedVisibility(
@@ -1471,84 +1409,14 @@ fun AntigravityPulseApp(
                             )
                     ) {
                         HorizontalDivider(color = border, thickness = 1.dp)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 4.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            PulseTab.entries.forEachIndexed { index, tab ->
-                                val selected = selectedTabIndex == index
-                                val labelText = stringResource(id = tab.shortTitleRes)
-                                val isLiveInRam = tab.workspaceCoordinatorId()?.let { it in pinnedWorkspaceIds } == true
-                                val pillBg by animateColorAsState(
-                                    targetValue = if (selected) accent.copy(alpha = 0.16f) else Color.Transparent,
-                                    animationSpec = tween(if (smoothAnimations) 160 else 0),
-                                    label = "nav_pill_bg_${tab.name}"
-                                )
-                                val itemTint by animateColorAsState(
-                                    targetValue = if (selected) accent else secondaryFg,
-                                    animationSpec = tween(if (smoothAnimations) 150 else 0),
-                                    label = "nav_item_tint_${tab.name}"
-                                )
-                                val iconScale by animateFloatAsState(
-                                    targetValue = if (selected) 1.08f else 1.0f,
-                                    animationSpec = tween(if (smoothAnimations) 150 else 0),
-                                    label = "nav_icon_scale_${tab.name}"
-                                )
-                                Column(
-                                    modifier = Modifier
-                                        .widthIn(min = 58.dp)
-                                        .heightIn(min = 52.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .clickable { selectedTabIndex = index }
-                                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                                        .testTag(tab.tag),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(pillBg)
-                                            .padding(horizontal = 12.dp, vertical = 3.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = tab.icon,
-                                            contentDescription = stringResource(id = tab.titleRes),
-                                            tint = itemTint,
-                                            modifier = Modifier
-                                                .size(20.dp)
-                                                .graphicsLayer {
-                                                    scaleX = iconScale
-                                                    scaleY = iconScale
-                                                }
-                                        )
-                                        if (isLiveInRam && !selected) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .align(Alignment.TopEnd)
-                                                    .size(5.dp)
-                                                    .clip(CircleShape)
-                                                    .background(activeTheme.successColor)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = labelText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                        color = itemTint,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
+                        WorkspaceBottomNavigationBar(
+                            selectedTabIndex = selectedTabIndex,
+                            smoothAnimations = smoothAnimations,
+                            accent = accent,
+                            secondaryFg = secondaryFg,
+                            liveIndicatorColor = activeTheme.successColor,
+                            onSelectTab = { selectedTabIndex = it }
+                        )
                     }
                 }
             }
@@ -1557,6 +1425,7 @@ fun AntigravityPulseApp(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
                     .background(bg)
             ) {
                 if (isWideScreen && !isBarsHidden) {
@@ -1759,6 +1628,7 @@ fun AntigravityPulseApp(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
+                                        .imePadding()
                                         .zIndex(2f)
                                         .background(bg)
                                 ) {
@@ -1787,51 +1657,13 @@ fun AntigravityPulseApp(
 
                     // Compact Translucent Movable Side Panel (Active by default in Fullscreen Mode)
                     if (isBarsHidden) {
-                        val activeTab = PulseTab.entries[selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)]
-                        val isOnT3Code = activeTab == PulseTab.T3_CODE
-                        val isOnAiStudio = activeTab == PulseTab.AI_STUDIO
-                        val isOnBrowser = activeTab == PulseTab.BROWSER
-                        val activeDevWorkspace = activeTab.devWorkspace
-                        val activeDevSession = activeDevWorkspace?.let { DevWebWorkspaceRegistry.session(it) }
-                        val activeT3EnvironmentLabel = t3Environments
-                            .firstOrNull { it.id == t3ActiveEnvId }?.label
-                            ?: T3CodePinnedWebViewManager.CLOUD_ENVIRONMENT.label
-                        val activeDevShortcutId = when (activeDevWorkspace) {
-                            DevWebWorkspace.GITHUB -> githubActiveShortcut
-                            DevWebWorkspace.VERCEL -> vercelActiveShortcut
-                            DevWebWorkspace.SUPABASE -> supabaseActiveShortcut
-                            DevWebWorkspace.GEMINI -> geminiActiveShortcut
-                            null -> ""
-                        }
-                        val activeDesktopMode = when {
-                            isOnT3Code -> t3DesktopMode
-                            isOnBrowser -> activeBrowserTab.isDesktopMode
-                            activeDevWorkspace == DevWebWorkspace.GITHUB -> githubDesktopMode
-                            activeDevWorkspace == DevWebWorkspace.VERCEL -> vercelDesktopMode
-                            activeDevWorkspace == DevWebWorkspace.SUPABASE -> supabaseDesktopMode
-                            activeDevWorkspace == DevWebWorkspace.GEMINI -> geminiDesktopMode
-                            else -> false
-                        }
-
-                        MovableFloatingControlPanel(
-                            isExpanded = showFloatingQuickMenu,
-                            xFraction = appearance.floatingHandleXFraction,
-                            yFraction = appearance.floatingHandleYFraction,
-                            tabs = panelTabs,
-                            selectedTabIndex = selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex),
-                            activeHostLabel = activeProfile?.name ?: "Connect Remote URL",
-                            isAiStudioActive = isOnAiStudio,
-                            activeAiStudioSection = activeAiStudioSection,
-                            activeDevWorkspace = activeDevWorkspace,
-                            activeDevShortcutId = activeDevShortcutId,
-                            isT3CodeActive = isOnT3Code,
-                            activeT3EnvironmentLabel = activeT3EnvironmentLabel,
-                            isBrowserActive = isOnBrowser,
-                            isBrowserBarVisible = isBrowserBarVisible,
-                            browserTabCount = browserTabs.size,
-                            isDesktopModeEnabled = activeDesktopMode,
+                        FullscreenMovableControlPanelHost(
+                            appearance = appearance,
+                            selectedTabIndex = selectedTabIndex,
+                            showFloatingQuickMenu = showFloatingQuickMenu,
+                            panelTabs = panelTabs,
+                            activeProfileName = activeProfile?.name,
                             domLagBoosterEnabled = telemetry.domLagBoosterEnabled,
-                            pinnedRamCount = pinnedRamCount,
                             surface = surface,
                             elevated = elevated,
                             border = border,
@@ -1839,162 +1671,14 @@ fun AntigravityPulseApp(
                             secondaryFg = secondaryFg,
                             accent = accent,
                             onExpandedChange = { showFloatingQuickMenu = it },
-                            onPersistPositionFraction = { xFrac, yFrac ->
-                                onUpdateAppearance {
-                                    it.copy(
-                                        floatingHandleXFraction = xFrac,
-                                        floatingHandleYFraction = yFrac
-                                    )
-                                }
-                            },
-                            onSelectTab = { index -> selectedTabIndex = index },
-                            onSelectAiStudioSection = { section ->
-                                AiStudioPinnedWebViewManager.navigateToSection(section)
-                            },
-                            onSelectDevShortcut = { shortcut ->
-                                activeDevSession?.navigateToShortcut(shortcut)
-                            },
-                            onOpenT3CloudHome = {
-                                T3CodePinnedWebViewManager.navigateToCloudHome(context)
-                                antigravityViewModel.recordWebViewBridgeEvent("Opened T3 Code Cloud (app.t3.codes)")
-                            },
-                            onOpenT3Environments = {
-                                showT3EnvironmentsDialog = true
-                            },
-                            onOpenT3QrScanner = {
-                                showT3QrScanner = true
-                            },
-                            onOpenT3External = {
-                                try {
-                                    val url = T3CodePinnedWebViewManager.currentUrl()
-                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                .addCategory(Intent.CATEGORY_BROWSABLE)
-                                        )
-                                    } else {
-                                        antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
-                                    }
-                                } catch (_: Exception) {
-                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
-                                }
-                            },
-                            onToggleDesktopMode = { enabled ->
-                                if (isOnT3Code) {
-                                    T3CodePinnedWebViewManager.setDesktopMode(enabled)
-                                    antigravityViewModel.recordWebViewBridgeEvent(
-                                        if (enabled) "T3 Code: Desktop View enabled (pinch-to-zoom ON)"
-                                        else "T3 Code: Mobile View enabled"
-                                    )
-                                } else if (isOnBrowser) {
-                                    PulseBrowserManager.setActiveTabDesktopMode(enabled)
-                                    antigravityViewModel.recordWebViewBridgeEvent(
-                                        if (enabled) "Browser: Desktop View enabled"
-                                        else "Browser: Mobile View enabled"
-                                    )
-                                } else {
-                                    activeDevSession?.setDesktopMode(enabled)
-                                    activeDevWorkspace?.let { ws ->
-                                        antigravityViewModel.recordWebViewBridgeEvent(
-                                            if (enabled) "${ws.displayName}: Desktop View enabled"
-                                            else "${ws.displayName}: Mobile View enabled"
-                                        )
-                                    }
-                                }
-                            },
+                            onUpdateAppearance = onUpdateAppearance,
+                            onSelectTab = { selectedTabIndex = it },
+                            onOpenT3Environments = { showT3EnvironmentsDialog = true },
+                            onOpenT3QrScanner = { showT3QrScanner = true },
                             onToggleDomBooster = antigravityViewModel::toggleDomLagBooster,
-                            onOpenAiStudioExternal = {
-                                try {
-                                    val url = AiStudioPinnedWebViewManager.currentUrl()
-                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                .addCategory(Intent.CATEGORY_BROWSABLE)
-                                        )
-                                    } else {
-                                        antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
-                                    }
-                                } catch (_: Exception) {
-                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
-                                }
-                            },
-                            onOpenDevWorkspaceExternal = {
-                                try {
-                                    val url = activeDevSession?.currentUrl().orEmpty()
-                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                .addCategory(Intent.CATEGORY_BROWSABLE)
-                                        )
-                                    } else {
-                                        antigravityViewModel.recordWebViewBridgeEvent("Blocked unsafe external URL.")
-                                    }
-                                } catch (_: Exception) {
-                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
-                                }
-                            },
-                            onNewBrowserTab = {
-                                PulseBrowserManager.openNewTab()
-                                PulseBrowserManager.setAddressBarVisible(true)
-                            },
-                            onToggleBrowserBar = { PulseBrowserManager.toggleAddressBar() },
-                            onOpenBrowserExternal = {
-                                try {
-                                    val url = activeBrowserTab.url
-                                    if (RetainedWebViewManager.isSafeHttpUrl(url)) {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                .addCategory(Intent.CATEGORY_BROWSABLE)
-                                        )
-                                    } else {
-                                        antigravityViewModel.recordWebViewBridgeEvent("Open a webpage first.")
-                                    }
-                                } catch (_: Exception) {
-                                    antigravityViewModel.recordWebViewBridgeEvent("No external browser available.")
-                                }
-                            },
                             onOpenHostSwitcher = { showServerModal = true },
                             onOpenQrScanner = { showGlobalQrScanner = true },
-                            reloadActionLabel = when {
-                                isOnT3Code -> "Reload T3 Code"
-                                isOnAiStudio -> "Reload AI Studio"
-                                isOnBrowser -> "Reload Page"
-                                activeDevWorkspace != null -> "Reload ${activeDevWorkspace.displayName}"
-                                else -> "Reload Remote"
-                            },
-                            onReloadWeb = {
-                                when {
-                                    isOnT3Code -> {
-                                        T3CodePinnedWebViewManager.reloadCurrentPage()
-                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading T3 Code...")
-                                    }
-
-                                    isOnAiStudio -> {
-                                        AiStudioPinnedWebViewManager.reloadCurrentPage()
-                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading AI Studio...")
-                                    }
-
-                                    isOnBrowser -> {
-                                        PulseBrowserManager.reloadActiveTab()
-                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading browser tab...")
-                                    }
-
-                                    activeDevSession != null && activeDevWorkspace != null -> {
-                                        activeDevSession.reloadCurrentPage()
-                                        antigravityViewModel.recordWebViewBridgeEvent(
-                                            "Reloading ${activeDevWorkspace.displayName}..."
-                                        )
-                                    }
-
-                                    else -> {
-                                        RetainedWebViewManager.reloadCurrentPage()
-                                        antigravityViewModel.recordWebViewBridgeEvent("Reloading Antigravity Remote...")
-                                    }
-                                }
-                            },
-                            onShowBars = {
-                                onUpdateAppearance { it.copy(isFullscreenBarsHidden = false) }
-                            },
+                            onRecordBridgeEvent = antigravityViewModel::recordWebViewBridgeEvent,
                             onOpenSettings = { showAppearanceSheet = true }
                         )
                     }
@@ -2341,6 +2025,426 @@ fun AntigravityPulseApp(
  * full-screen layers on every single WebView scroll frame.
  */
 @Composable
+private fun WorkspaceKeepAliveServiceObserver(enabled: Boolean) {
+    val context = LocalContext.current
+    val pinnedRamCount by WorkspaceMemoryKeepAliveCoordinator.pinnedCount.collectAsStateWithLifecycle()
+    LaunchedEffect(enabled, pinnedRamCount) {
+        if (enabled && pinnedRamCount > 0) {
+            if (!WorkspaceKeepAliveService.userPausedKeepAlive) {
+                WorkspaceKeepAliveService.startOrUpdate(context)
+            }
+        } else {
+            WorkspaceKeepAliveService.stop(context)
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceBackHandler(
+    currentPulseTab: PulseTab,
+    selectedTabIndex: Int,
+    showAppearanceSheet: Boolean,
+    showFloatingQuickMenu: Boolean,
+    onCloseFloatingQuickMenu: () -> Unit,
+    onNavigateToWebBridge: () -> Unit
+) {
+    val remoteCanGoBack by RetainedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
+    val aiStudioCanGoBack by AiStudioPinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
+    val t3CanGoBack by T3CodePinnedWebViewManager.canGoBackState.collectAsStateWithLifecycle()
+    val t3PopupWebView by T3CodePinnedWebViewManager.popupWebViewState.collectAsStateWithLifecycle()
+    val githubSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GITHUB) }
+    val vercelSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.VERCEL) }
+    val supabaseSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.SUPABASE) }
+    val geminiSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GEMINI) }
+    val githubCanGoBack by githubSession.canGoBackState.collectAsStateWithLifecycle()
+    val vercelCanGoBack by vercelSession.canGoBackState.collectAsStateWithLifecycle()
+    val supabaseCanGoBack by supabaseSession.canGoBackState.collectAsStateWithLifecycle()
+    val geminiCanGoBack by geminiSession.canGoBackState.collectAsStateWithLifecycle()
+    val browserCanGoBack by PulseBrowserManager.activeTabCanGoBack.collectAsStateWithLifecycle()
+
+    val isT3CodeBackActive = currentPulseTab == PulseTab.T3_CODE && (t3CanGoBack || t3PopupWebView != null)
+    val isAiStudioWebBackActive = currentPulseTab == PulseTab.AI_STUDIO && aiStudioCanGoBack
+    val isBrowserBackActive = currentPulseTab == PulseTab.BROWSER && browserCanGoBack
+    val activeDevBackSession = when (currentPulseTab) {
+        PulseTab.GITHUB -> if (githubCanGoBack) githubSession else null
+        PulseTab.VERCEL -> if (vercelCanGoBack) vercelSession else null
+        PulseTab.SUPABASE -> if (supabaseCanGoBack) supabaseSession else null
+        PulseTab.GEMINI -> if (geminiCanGoBack) geminiSession else null
+        else -> null
+    }
+    BackHandler(
+        enabled = !showAppearanceSheet &&
+            (showFloatingQuickMenu ||
+                selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal ||
+                remoteCanGoBack ||
+                isT3CodeBackActive ||
+                isAiStudioWebBackActive ||
+                isBrowserBackActive ||
+                activeDevBackSession != null)
+    ) {
+        when {
+            showFloatingQuickMenu -> onCloseFloatingQuickMenu()
+            isT3CodeBackActive -> T3CodePinnedWebViewManager.goBack()
+            isAiStudioWebBackActive -> AiStudioPinnedWebViewManager.goBack()
+            isBrowserBackActive -> PulseBrowserManager.goBackActiveTab()
+            activeDevBackSession != null -> activeDevBackSession.goBack()
+            selectedTabIndex != PulseTab.WEB_BRIDGE.ordinal -> onNavigateToWebBridge()
+            else -> RetainedWebViewManager.goBack()
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceBottomNavigationBar(
+    selectedTabIndex: Int,
+    smoothAnimations: Boolean,
+    accent: Color,
+    secondaryFg: Color,
+    liveIndicatorColor: Color,
+    onSelectTab: (Int) -> Unit
+) {
+    val workspaceRamStatuses by WorkspaceMemoryKeepAliveCoordinator.workspaceStatuses.collectAsStateWithLifecycle()
+    val pinnedWorkspaceIds = remember(workspaceRamStatuses) {
+        workspaceRamStatuses.filter { it.isPinnedInRam }.map { it.id }.toSet()
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PulseTab.entries.forEachIndexed { index, tab ->
+            val selected = selectedTabIndex == index
+            val labelText = stringResource(id = tab.shortTitleRes)
+            val isLiveInRam = tab.workspaceCoordinatorId()?.let { it in pinnedWorkspaceIds } == true
+            val pillBg by animateColorAsState(
+                targetValue = if (selected) accent.copy(alpha = 0.16f) else Color.Transparent,
+                animationSpec = tween(if (smoothAnimations) 160 else 0),
+                label = "nav_pill_bg_${tab.name}"
+            )
+            val itemTint by animateColorAsState(
+                targetValue = if (selected) accent else secondaryFg,
+                animationSpec = tween(if (smoothAnimations) 150 else 0),
+                label = "nav_item_tint_${tab.name}"
+            )
+            val iconScale by animateFloatAsState(
+                targetValue = if (selected) 1.08f else 1.0f,
+                animationSpec = tween(if (smoothAnimations) 150 else 0),
+                label = "nav_icon_scale_${tab.name}"
+            )
+            Column(
+                modifier = Modifier
+                    .widthIn(min = 58.dp)
+                    .heightIn(min = 52.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onSelectTab(index) }
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .testTag(tab.tag),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(pillBg)
+                        .padding(horizontal = 12.dp, vertical = 3.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = tab.icon,
+                        contentDescription = stringResource(id = tab.titleRes),
+                        tint = itemTint,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer {
+                                scaleX = iconScale
+                                scaleY = iconScale
+                            }
+                    )
+                    if (isLiveInRam && !selected) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(liveIndicatorColor)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = labelText,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = itemTint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullscreenMovableControlPanelHost(
+    appearance: AppearanceSettings,
+    selectedTabIndex: Int,
+    showFloatingQuickMenu: Boolean,
+    panelTabs: List<FloatingPanelTabItem>,
+    activeProfileName: String?,
+    domLagBoosterEnabled: Boolean,
+    surface: Color,
+    elevated: Color,
+    border: Color,
+    fg: Color,
+    secondaryFg: Color,
+    accent: Color,
+    onExpandedChange: (Boolean) -> Unit,
+    onUpdateAppearance: ((AppearanceSettings) -> AppearanceSettings) -> Unit,
+    onSelectTab: (Int) -> Unit,
+    onOpenT3Environments: () -> Unit,
+    onOpenT3QrScanner: () -> Unit,
+    onToggleDomBooster: (Boolean) -> Unit,
+    onOpenHostSwitcher: () -> Unit,
+    onOpenQrScanner: () -> Unit,
+    onRecordBridgeEvent: (String) -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    val context = LocalContext.current
+    val activeAiStudioSection by AiStudioPinnedWebViewManager.activeSectionState.collectAsStateWithLifecycle()
+    val t3DesktopMode by T3CodePinnedWebViewManager.isDesktopModeState.collectAsStateWithLifecycle()
+    val t3Environments by T3CodePinnedWebViewManager.savedEnvironments.collectAsStateWithLifecycle()
+    val t3ActiveEnvId by T3CodePinnedWebViewManager.activeEnvironmentId.collectAsStateWithLifecycle()
+    val githubSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GITHUB) }
+    val vercelSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.VERCEL) }
+    val supabaseSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.SUPABASE) }
+    val geminiSession = remember { DevWebWorkspaceRegistry.session(DevWebWorkspace.GEMINI) }
+    val githubActiveShortcut by githubSession.activeShortcutId.collectAsStateWithLifecycle()
+    val vercelActiveShortcut by vercelSession.activeShortcutId.collectAsStateWithLifecycle()
+    val supabaseActiveShortcut by supabaseSession.activeShortcutId.collectAsStateWithLifecycle()
+    val geminiActiveShortcut by geminiSession.activeShortcutId.collectAsStateWithLifecycle()
+    val githubDesktopMode by githubSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val vercelDesktopMode by vercelSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val supabaseDesktopMode by supabaseSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val geminiDesktopMode by geminiSession.isDesktopModeState.collectAsStateWithLifecycle()
+    val browserTabs by PulseBrowserManager.tabs.collectAsStateWithLifecycle()
+    val browserActiveTabId by PulseBrowserManager.activeTabId.collectAsStateWithLifecycle()
+    val isBrowserBarVisible by PulseBrowserManager.isAddressBarVisible.collectAsStateWithLifecycle()
+    val activeBrowserTab = browserTabs.firstOrNull { it.id == browserActiveTabId } ?: browserTabs.first()
+    val pinnedRamCount by WorkspaceMemoryKeepAliveCoordinator.pinnedCount.collectAsStateWithLifecycle()
+
+    val safeIndex = selectedTabIndex.coerceIn(0, PulseTab.entries.lastIndex)
+    val activeTab = PulseTab.entries[safeIndex]
+    val isOnT3Code = activeTab == PulseTab.T3_CODE
+    val isOnAiStudio = activeTab == PulseTab.AI_STUDIO
+    val isOnBrowser = activeTab == PulseTab.BROWSER
+    val activeDevWorkspace = activeTab.devWorkspace
+    val activeDevSession = activeDevWorkspace?.let { DevWebWorkspaceRegistry.session(it) }
+    val activeT3EnvironmentLabel = t3Environments
+        .firstOrNull { it.id == t3ActiveEnvId }?.label
+        ?: T3CodePinnedWebViewManager.CLOUD_ENVIRONMENT.label
+    val activeDevShortcutId = when (activeDevWorkspace) {
+        DevWebWorkspace.GITHUB -> githubActiveShortcut
+        DevWebWorkspace.VERCEL -> vercelActiveShortcut
+        DevWebWorkspace.SUPABASE -> supabaseActiveShortcut
+        DevWebWorkspace.GEMINI -> geminiActiveShortcut
+        null -> ""
+    }
+    val activeDesktopMode = when {
+        isOnT3Code -> t3DesktopMode
+        isOnBrowser -> activeBrowserTab.isDesktopMode
+        activeDevWorkspace == DevWebWorkspace.GITHUB -> githubDesktopMode
+        activeDevWorkspace == DevWebWorkspace.VERCEL -> vercelDesktopMode
+        activeDevWorkspace == DevWebWorkspace.SUPABASE -> supabaseDesktopMode
+        activeDevWorkspace == DevWebWorkspace.GEMINI -> geminiDesktopMode
+        else -> false
+    }
+
+    MovableFloatingControlPanel(
+        isExpanded = showFloatingQuickMenu,
+        xFraction = appearance.floatingHandleXFraction,
+        yFraction = appearance.floatingHandleYFraction,
+        tabs = panelTabs,
+        selectedTabIndex = safeIndex,
+        activeHostLabel = activeProfileName ?: "Connect Remote URL",
+        isAiStudioActive = isOnAiStudio,
+        activeAiStudioSection = activeAiStudioSection,
+        activeDevWorkspace = activeDevWorkspace,
+        activeDevShortcutId = activeDevShortcutId,
+        isT3CodeActive = isOnT3Code,
+        activeT3EnvironmentLabel = activeT3EnvironmentLabel,
+        isBrowserActive = isOnBrowser,
+        isBrowserBarVisible = isBrowserBarVisible,
+        browserTabCount = browserTabs.size,
+        isDesktopModeEnabled = activeDesktopMode,
+        domLagBoosterEnabled = domLagBoosterEnabled,
+        pinnedRamCount = pinnedRamCount,
+        surface = surface,
+        elevated = elevated,
+        border = border,
+        fg = fg,
+        secondaryFg = secondaryFg,
+        accent = accent,
+        onExpandedChange = onExpandedChange,
+        onPersistPositionFraction = { xFrac, yFrac ->
+            onUpdateAppearance {
+                it.copy(
+                    floatingHandleXFraction = xFrac,
+                    floatingHandleYFraction = yFrac
+                )
+            }
+        },
+        onSelectTab = onSelectTab,
+        onSelectAiStudioSection = { section ->
+            AiStudioPinnedWebViewManager.navigateToSection(section)
+        },
+        onSelectDevShortcut = { shortcut ->
+            activeDevSession?.navigateToShortcut(shortcut)
+        },
+        onOpenT3CloudHome = {
+            T3CodePinnedWebViewManager.navigateToCloudHome(context)
+            onRecordBridgeEvent("Opened T3 Code Cloud (app.t3.codes)")
+        },
+        onOpenT3Environments = onOpenT3Environments,
+        onOpenT3QrScanner = onOpenT3QrScanner,
+        onOpenT3External = {
+            try {
+                val url = T3CodePinnedWebViewManager.currentUrl()
+                if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addCategory(Intent.CATEGORY_BROWSABLE)
+                    )
+                } else {
+                    onRecordBridgeEvent("Blocked unsafe external URL.")
+                }
+            } catch (_: Exception) {
+                onRecordBridgeEvent("No external browser available.")
+            }
+        },
+        onToggleDesktopMode = { enabled ->
+            if (isOnT3Code) {
+                T3CodePinnedWebViewManager.setDesktopMode(enabled)
+                onRecordBridgeEvent(
+                    if (enabled) "T3 Code: Desktop View enabled (pinch-to-zoom ON)"
+                    else "T3 Code: Mobile View enabled"
+                )
+            } else if (isOnBrowser) {
+                PulseBrowserManager.setActiveTabDesktopMode(enabled)
+                onRecordBridgeEvent(
+                    if (enabled) "Browser: Desktop View enabled"
+                    else "Browser: Mobile View enabled"
+                )
+            } else {
+                activeDevSession?.setDesktopMode(enabled)
+                activeDevWorkspace?.let { ws ->
+                    onRecordBridgeEvent(
+                        if (enabled) "${ws.displayName}: Desktop View enabled"
+                        else "${ws.displayName}: Mobile View enabled"
+                    )
+                }
+            }
+        },
+        onToggleDomBooster = onToggleDomBooster,
+        onOpenAiStudioExternal = {
+            try {
+                val url = AiStudioPinnedWebViewManager.currentUrl()
+                if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addCategory(Intent.CATEGORY_BROWSABLE)
+                    )
+                } else {
+                    onRecordBridgeEvent("Blocked unsafe external URL.")
+                }
+            } catch (_: Exception) {
+                onRecordBridgeEvent("No external browser available.")
+            }
+        },
+        onOpenDevWorkspaceExternal = {
+            try {
+                val url = activeDevSession?.currentUrl().orEmpty()
+                if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addCategory(Intent.CATEGORY_BROWSABLE)
+                    )
+                } else {
+                    onRecordBridgeEvent("Blocked unsafe external URL.")
+                }
+            } catch (_: Exception) {
+                onRecordBridgeEvent("No external browser available.")
+            }
+        },
+        onNewBrowserTab = {
+            PulseBrowserManager.openNewTab()
+            PulseBrowserManager.setAddressBarVisible(true)
+        },
+        onToggleBrowserBar = { PulseBrowserManager.toggleAddressBar() },
+        onOpenBrowserExternal = {
+            try {
+                val url = activeBrowserTab.url
+                if (RetainedWebViewManager.isSafeHttpUrl(url)) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addCategory(Intent.CATEGORY_BROWSABLE)
+                    )
+                } else {
+                    onRecordBridgeEvent("Open a webpage first.")
+                }
+            } catch (_: Exception) {
+                onRecordBridgeEvent("No external browser available.")
+            }
+        },
+        onOpenHostSwitcher = onOpenHostSwitcher,
+        onOpenQrScanner = onOpenQrScanner,
+        reloadActionLabel = when {
+            isOnT3Code -> "Reload T3 Code"
+            isOnAiStudio -> "Reload AI Studio"
+            isOnBrowser -> "Reload Page"
+            activeDevWorkspace != null -> "Reload ${activeDevWorkspace.displayName}"
+            else -> "Reload Remote"
+        },
+        onReloadWeb = {
+            when {
+                isOnT3Code -> {
+                    T3CodePinnedWebViewManager.reloadCurrentPage()
+                    onRecordBridgeEvent("Reloading T3 Code...")
+                }
+
+                isOnAiStudio -> {
+                    AiStudioPinnedWebViewManager.reloadCurrentPage()
+                    onRecordBridgeEvent("Reloading AI Studio...")
+                }
+
+                isOnBrowser -> {
+                    PulseBrowserManager.reloadActiveTab()
+                    onRecordBridgeEvent("Reloading browser tab...")
+                }
+
+                activeDevSession != null && activeDevWorkspace != null -> {
+                    activeDevSession.reloadCurrentPage()
+                    onRecordBridgeEvent(
+                        "Reloading ${activeDevWorkspace.displayName}..."
+                    )
+                }
+
+                else -> {
+                    RetainedWebViewManager.reloadCurrentPage()
+                    onRecordBridgeEvent("Reloading Antigravity Remote...")
+                }
+            }
+        },
+        onShowBars = {
+            onUpdateAppearance { it.copy(isFullscreenBarsHidden = false) }
+        },
+        onOpenSettings = onOpenSettings
+    )
+}
+
+@Composable
 private fun KeepAliveWorkspaceSlot(
     isActive: Boolean,
     smoothAnimationsEnabled: Boolean,
@@ -2354,7 +2458,7 @@ private fun KeepAliveWorkspaceSlot(
             .zIndex(if (isActive) 1f else 0f)
             .then(
                 if (isActive) {
-                    Modifier
+                    Modifier.imePadding()
                 } else {
                     Modifier
                         .clearAndSetSemantics {}

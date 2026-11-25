@@ -620,32 +620,11 @@ object T3CodePinnedWebViewManager {
     fun applyLagBooster(enabled: Boolean) {
         domLagBoosterActive = enabled
         val target = pinnedWebView ?: return
-        // Preserve native animation timing and unconstrained horizontal scrolling for code diffs
-        // and integrated terminals while keeping tap response instant.
-        val js = if (enabled) {
-            """
-            (function() {
-              var id = 'antigravity-pulse-t3-dom-booster';
-              var style = document.getElementById(id);
-              if (!style && document.head) {
-                style = document.createElement('style');
-                style.id = id;
-                document.head.appendChild(style);
-              }
-              if (style) {
-                style.textContent =
-                  '${RetainedWebViewManager.LAG_BOOSTER_CSS}';
-              }
-            })();
-            """.trimIndent()
-        } else {
-            """
-            (function() {
-              var el = document.getElementById('antigravity-pulse-t3-dom-booster');
-              if (el && el.parentNode) { el.parentNode.removeChild(el); }
-            })();
-            """.trimIndent()
-        }
+        val js = WebViewOfflineCacheHelper.buildLagBoosterScript(
+            enabled = enabled,
+            styleElementId = "antigravity-pulse-t3-dom-booster",
+            cssText = RetainedWebViewManager.LAG_BOOSTER_CSS
+        )
         target.post {
             try {
                 target.evaluateJavascript(js, null)
@@ -730,16 +709,7 @@ object T3CodePinnedWebViewManager {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            setLayerType(View.LAYER_TYPE_NONE, null)
-            isNestedScrollingEnabled = false
-            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
-            // through an offscreen stretch layer while dragging past either end of the page,
-            // which is a well-known source of dropped frames on mid-range mobile GPUs.
-            overScrollMode = View.OVER_SCROLL_NEVER
-            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
-            // invalidates the WebView on every scroll frame.
-            isVerticalScrollBarEnabled = false
+            WebViewOfflineCacheHelper.configureScrollResponsiveWebView(this)
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -800,6 +770,26 @@ object T3CodePinnedWebViewManager {
                     super.onPageStarted(view, url, favicon)
                     if (!url.isNullOrBlank() && RetainedWebViewManager.isSafeHttpUrl(url)) {
                         _popupUrlState.value = RetainedWebViewManager.stripSensitiveUrlCredentials(url)
+                    }
+                }
+
+                override fun onPageCommitVisible(view: WebView?, url: String?) {
+                    super.onPageCommitVisible(view, url)
+                    val isErrorPage = url.isNullOrBlank() ||
+                        url.startsWith("chrome-error:", ignoreCase = true) ||
+                        url.startsWith("about:", ignoreCase = true)
+                    if (!isErrorPage && domLagBoosterActive && view != null) {
+                        val js = WebViewOfflineCacheHelper.buildLagBoosterScript(
+                            enabled = true,
+                            styleElementId = "antigravity-pulse-t3-dom-booster",
+                            cssText = RetainedWebViewManager.LAG_BOOSTER_CSS
+                        )
+                        view.post {
+                            try {
+                                view.evaluateJavascript(js, null)
+                            } catch (_: Exception) {
+                            }
+                        }
                     }
                 }
 
@@ -888,17 +878,7 @@ object T3CodePinnedWebViewManager {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            setLayerType(View.LAYER_TYPE_NONE, null)
-            isNestedScrollingEnabled = false
-            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
-            // through an offscreen stretch layer while dragging past either end of the page,
-            // which is a well-known source of dropped frames on mid-range mobile GPUs.
-            overScrollMode = View.OVER_SCROLL_NEVER
-            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
-            // invalidates the WebView on every scroll frame.
-            isVerticalScrollBarEnabled = false
-            setInitialScale(0)
+            WebViewOfflineCacheHelper.configureScrollResponsiveWebView(this)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
                     setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
@@ -1107,6 +1087,16 @@ object T3CodePinnedWebViewManager {
                 ) {
                     handler?.cancel()
                     onPageEvent("Blocked untrusted SSL certificate in T3 Code workspace.")
+                }
+
+                override fun onPageCommitVisible(view: WebView?, url: String?) {
+                    super.onPageCommitVisible(view, url)
+                    val isErrorPage = url.isNullOrBlank() ||
+                        url.startsWith("chrome-error:", ignoreCase = true) ||
+                        url.startsWith("about:", ignoreCase = true)
+                    if (!isErrorPage) {
+                        applyLagBooster(domLagBoosterActive)
+                    }
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {

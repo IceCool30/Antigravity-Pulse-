@@ -13,6 +13,7 @@ import android.view.View
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.example.ui.components.TouchSafeWebViewContainer
 
 enum class OfflineRecoveryStatus {
     ONLINE,
@@ -267,9 +268,153 @@ object WebViewOfflineCacheHelper {
      * 2. Hidden tabs consume zero GPU compositor/rAF cycles and are completely excluded from
      *    Android ViewGroup touch hit-testing and drawing—keeping foreground touch instant at 120Hz.
      */
+    @Volatile
+    private var lastGlobalTimerResumeMs: Long = 0L
+
+    /**
+     * Resumes Chromium's process-wide JS/timer scheduler at most once per short burst so
+     * restoring a screen or switching tabs never fires 5+ redundant native timer wakeups.
+     */
+    fun resumeTimersOnce(webView: WebView?, force: Boolean = false) {
+        val target = webView ?: return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!force && now - lastGlobalTimerResumeMs < 250L) return
+        lastGlobalTimerResumeMs = now
+        try {
+            target.resumeTimers()
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Applies common 60/120Hz scroll and hardware-compositing settings to a [WebView] without
+     * `setInitialScale(0)` relayout quirks or offscreen FBO double-buffering.
+     */
+    fun configureScrollResponsiveWebView(webView: WebView) {
+        try {
+            webView.setLayerType(View.LAYER_TYPE_NONE, null)
+            webView.isNestedScrollingEnabled = false
+            webView.overScrollMode = View.OVER_SCROLL_NEVER
+            webView.scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+            webView.isVerticalScrollBarEnabled = false
+            webView.isHorizontalScrollBarEnabled = false
+            webView.isHapticFeedbackEnabled = false
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Builds the idempotent JS snippet that injects/removes zero-wildcard lag-reduction CSS and
+     * re-applies lightweight GPU-heavy style fixes on SPA route changes (`pushState` / `popstate`).
+     */
+    fun buildLagBoosterScript(
+        enabled: Boolean,
+        styleElementId: String,
+        cssText: String
+    ): String {
+        val quotedId = org.json.JSONObject.quote(styleElementId)
+        if (!enabled) {
+            return """
+                (function() {
+                    try {
+                        var el = document.getElementById($quotedId);
+                        if (el && el.parentNode) el.parentNode.removeChild(el);
+                        window.__agLagState = window.__agLagState || {};
+                        window.__agLagState[$quotedId] = false;
+                    } catch (_e) {}
+                })();
+            """.trimIndent()
+        }
+        val quotedCss = org.json.JSONObject.quote(cssText)
+        return """
+            (function() {
+                try {
+                    var id = $quotedId;
+                    window.__agLagState = window.__agLagState || {};
+                    window.__agLagState[id] = true;
+                    var apply = function() {
+                        var head = document.head || document.documentElement;
+                        if (!head) return;
+                        var el = document.getElementById(id);
+                        if (!el) {
+                            el = document.createElement('style');
+                            el.id = id;
+                            el.textContent = $quotedCss;
+                            head.appendChild(el);
+                        } else if (el.textContent !== $quotedCss) {
+                            el.textContent = $quotedCss;
+                        }
+                        if (window.requestAnimationFrame && !window.__agSweepQueued) {
+                            window.__agSweepQueued = true;
+                            window.requestAnimationFrame(function() {
+                                window.__agSweepQueued = false;
+                                if (!window.__agLagState || !window.__agLagState[id]) return;
+                                try {
+                                    var nodes = document.querySelectorAll(
+                                        'header, nav, footer, aside, dialog, mat-toolbar, ' +
+                                        '[role="banner"], [role="navigation"], [role="toolbar"], [role="dialog"], ' +
+                                        'main, [role="main"], body > div, #root > div, #app > div, app-root > div'
+                                    );
+                                    var limit = Math.min(nodes.length, 64);
+                                    for (var i = 0; i < limit; i++) {
+                                        var node = nodes[i];
+                                        if (!node || !node.style || node.dataset.agOpt === '1') continue;
+                                        var cs = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                                        if (!cs) continue;
+                                        if ((cs.backdropFilter && cs.backdropFilter !== 'none') ||
+                                            (cs.webkitBackdropFilter && cs.webkitBackdropFilter !== 'none')) {
+                                            node.style.setProperty('backdrop-filter', 'none', 'important');
+                                            node.style.setProperty('-webkit-backdrop-filter', 'none', 'important');
+                                        }
+                                        if (cs.backgroundAttachment === 'fixed') {
+                                            node.style.setProperty('background-attachment', 'scroll', 'important');
+                                        }
+                                        if (cs.scrollBehavior === 'smooth') {
+                                            node.style.setProperty('scroll-behavior', 'auto', 'important');
+                                        }
+                                        node.dataset.agOpt = '1';
+                                    }
+                                } catch (_sweepErr) {}
+                            });
+                        }
+                    };
+                    apply();
+                    window.__agLagHooks = window.__agLagHooks || {};
+                    if (!window.__agLagHooks[id] && window.history) {
+                        window.__agLagHooks[id] = true;
+                        var wrapHistory = function(methodName) {
+                            var orig = window.history[methodName];
+                            if (typeof orig !== 'function') return;
+                            window.history[methodName] = function() {
+                                var ret = orig.apply(this, arguments);
+                                if (window.__agLagState && window.__agLagState[id]) {
+                                    setTimeout(apply, 120);
+                                }
+                                return ret;
+                            };
+                        };
+                        wrapHistory('pushState');
+                        wrapHistory('replaceState');
+                        window.addEventListener('popstate', function() {
+                            if (window.__agLagState && window.__agLagState[id]) {
+                                setTimeout(apply, 120);
+                            }
+                        }, { passive: true });
+                    }
+                } catch (_e) {}
+            })();
+        """.trimIndent()
+    }
+
     fun applyWindowAttachedVisibility(webView: WebView, isActive: Boolean) {
         try {
             val targetVisibility = if (isActive) View.VISIBLE else View.GONE
+            (webView.parent as? TouchSafeWebViewContainer)?.let { container ->
+                container.isActiveWorkspace = isActive
+                if (container.visibility != targetVisibility) {
+                    container.visibility = targetVisibility
+                }
+            }
             if (webView.visibility != targetVisibility) {
                 webView.visibility = targetVisibility
             }
@@ -302,13 +447,12 @@ object WebViewOfflineCacheHelper {
             if (previousState != isActive) {
                 if (isActive) {
                     webView.onResume()
-                    webView.resumeTimers()
+                    resumeTimersOnce(webView, force = true)
                 } else {
-                    // Pause ONLY this hidden WebView's GPU rendering/rAF animations so it never
-                    // competes with the active workspace for UI/RenderThread frames. Never call
-                    // pauseTimers(), which is global across all WebViews.
+                    // Pause ONLY this hidden WebView's GPU compositing/rAF animations so hidden tabs
+                    // never compete with the active workspace for UI/RenderThread/CrRendererMain frames.
+                    // Do not call resumeTimers() here; the active tab owns timer resumption.
                     webView.onPause()
-                    webView.resumeTimers()
                 }
             }
         } catch (_: Exception) {
@@ -324,8 +468,8 @@ object WebViewOfflineCacheHelper {
         try {
             if (target.visibility == View.VISIBLE) {
                 target.onResume()
+                resumeTimersOnce(target)
             }
-            target.resumeTimers()
         } catch (_: Exception) {
         }
     }

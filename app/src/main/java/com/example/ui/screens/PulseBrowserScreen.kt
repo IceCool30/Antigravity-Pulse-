@@ -56,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -75,8 +76,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.remote.ConnectedAppBrowserLinks
 import com.example.data.remote.PulseBrowserManager
 import com.example.data.remote.RetainedWebViewManager
-import com.example.data.remote.WebViewOfflineCacheHelper
 import com.example.ui.components.OfflineContinuityOverlay
+import com.example.ui.components.PinnedWebViewHost
 import com.example.ui.theme.EmeraldOnline
 import com.example.ui.theme.LocalAppearanceSettings
 import com.example.ui.theme.frostedGlass
@@ -392,29 +393,30 @@ fun PulseBrowserScreen(
             tabs.filter { it.url.isNotBlank() }.forEach { tab ->
                 val isTabActive = tab.id == activeTab.id
                 val shouldBeVisible = isTabActive && isWorkspaceActive
+                val tabLayerModifier = if (shouldBeVisible) {
+                    Modifier.graphicsLayer { clip = true }
+                } else {
+                    Modifier
+                        .drawWithContent {}
+                        .clearAndSetSemantics {}
+                }
                 key(tab.id, tab.rendererGeneration) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .zIndex(if (isTabActive) 1f else 0f)
-                            .then(
-                                if (isTabActive) Modifier else Modifier.clearAndSetSemantics {}
-                            )
+                            .then(tabLayerModifier)
                     ) {
-                        AndroidView(
+                        PinnedWebViewHost(
+                            isWorkspaceActive = shouldBeVisible,
                             modifier = Modifier.fillMaxSize(),
-                            factory = { ctx ->
+                            webViewProvider = { ctx ->
                                 PulseBrowserManager.obtainWebViewForTab(
                                     context = ctx,
                                     tabId = tab.id,
                                     domLagBooster = domLagBoosterEnabled,
                                     onPageEvent = onStatusEvent
-                                ).also { wv ->
-                                    WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, shouldBeVisible)
-                                }
-                            },
-                            update = { wv ->
-                                WebViewOfflineCacheHelper.applyWindowAttachedVisibility(wv, shouldBeVisible)
+                                )
                             }
                         )
                     }

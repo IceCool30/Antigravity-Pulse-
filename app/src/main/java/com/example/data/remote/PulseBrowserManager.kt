@@ -84,8 +84,19 @@ object PulseBrowserManager {
     private val _activeTabId = MutableStateFlow(initialTab.id)
     val activeTabId: StateFlow<String> = _activeTabId.asStateFlow()
 
+    private val _activeTabCanGoBack = MutableStateFlow(initialTab.canGoBack)
+    val activeTabCanGoBack: StateFlow<Boolean> = _activeTabCanGoBack.asStateFlow()
+
     private val _isAddressBarVisible = MutableStateFlow(true)
     val isAddressBarVisible: StateFlow<Boolean> = _isAddressBarVisible.asStateFlow()
+
+    private fun syncActiveTabCanGoBack() {
+        val activeId = _activeTabId.value
+        val canGoBack = _tabs.value.firstOrNull { it.id == activeId }?.canGoBack == true
+        if (_activeTabCanGoBack.value != canGoBack) {
+            _activeTabCanGoBack.value = canGoBack
+        }
+    }
 
     fun activeTab(): PulseBrowserTabState {
         val current = _tabs.value
@@ -110,6 +121,7 @@ object PulseBrowserManager {
         )
         _tabs.value = _tabs.value + newTab
         _activeTabId.value = id
+        syncActiveTabCanGoBack()
         if (resolved.isNotBlank()) {
             tabLastGoodUrls[id] = resolved
         }
@@ -119,6 +131,7 @@ object PulseBrowserManager {
     fun selectTab(tabId: String) {
         if (_tabs.value.any { it.id == tabId }) {
             _activeTabId.value = tabId
+            syncActiveTabCanGoBack()
         }
     }
 
@@ -140,6 +153,7 @@ object PulseBrowserManager {
                 _activeTabId.value = remaining[nextIdx].id
             }
         }
+        syncActiveTabCanGoBack()
     }
 
     private fun destroyTabWebView(tabId: String) {
@@ -169,6 +183,7 @@ object PulseBrowserManager {
         _tabs.value = _tabs.value.map { tab ->
             if (tab.id == tabId) transform(tab) else tab
         }
+        syncActiveTabCanGoBack()
     }
 
     fun navigateActiveTab(rawInput: String): String? {
@@ -482,30 +497,11 @@ object PulseBrowserManager {
     fun applyLagBooster(tabId: String, enabled: Boolean) {
         domLagBoosterActive = enabled
         val target = tabWebViews[tabId] ?: return
-        val js = if (enabled) {
-            """
-            (function() {
-              var id = 'antigravity-pulse-dom-booster';
-              var style = document.getElementById(id);
-              if (!style && document.head) {
-                style = document.createElement('style');
-                style.id = id;
-                document.head.appendChild(style);
-              }
-              if (style) {
-                style.textContent =
-                  '${RetainedWebViewManager.LAG_BOOSTER_CSS}';
-              }
-            })();
-            """.trimIndent()
-        } else {
-            """
-            (function() {
-              var el = document.getElementById('antigravity-pulse-dom-booster');
-              if (el && el.parentNode) { el.parentNode.removeChild(el); }
-            })();
-            """.trimIndent()
-        }
+        val js = WebViewOfflineCacheHelper.buildLagBoosterScript(
+            enabled = enabled,
+            styleElementId = "antigravity-pulse-dom-booster",
+            cssText = RetainedWebViewManager.LAG_BOOSTER_CSS
+        )
         target.post {
             try {
                 target.evaluateJavascript(js, null)
@@ -549,6 +545,7 @@ object PulseBrowserManager {
         pinnedSinceElapsedMs = 0L
         _tabs.value = listOf(fresh)
         _activeTabId.value = fresh.id
+        syncActiveTabCanGoBack()
         WorkspaceMemoryKeepAliveCoordinator.notifyWorkspaceTopologyChanged()
     }
 
@@ -574,18 +571,7 @@ object PulseBrowserManager {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            setLayerType(View.LAYER_TYPE_NONE, null)
-            isNestedScrollingEnabled = false
-            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
-            // through an offscreen stretch layer while dragging past either end of the page,
-            // which is a well-known source of dropped frames on mid-range mobile GPUs.
-            overScrollMode = View.OVER_SCROLL_NEVER
-            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
-            // invalidates the WebView on every scroll frame.
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
-            setInitialScale(0)
+            WebViewOfflineCacheHelper.configureScrollResponsiveWebView(this)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
                     setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
@@ -597,6 +583,7 @@ object PulseBrowserManager {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
+                databaseEnabled = true
                 allowFileAccess = false
                 @Suppress("DEPRECATION")
                 allowFileAccessFromFileURLs = false
@@ -768,6 +755,20 @@ object PulseBrowserManager {
                 ) {
                     handler?.cancel()
                     onPageEvent("Blocked untrusted SSL certificate in Pulse Browser.")
+                }
+
+                override fun onPageCommitVisible(view: WebView?, url: String?) {
+                    super.onPageCommitVisible(view, url)
+                    val isErrorPage = url.isNullOrBlank() ||
+                        url.startsWith("chrome-error:", ignoreCase = true) ||
+                        url.startsWith("about:", ignoreCase = true)
+                    if (!isErrorPage) {
+                        val desktop = _tabs.value.firstOrNull { it.id == tabId }?.isDesktopMode == true
+                        if (!desktop) {
+                            RetainedWebViewManager.injectMobileLayoutFix(view)
+                        }
+                        applyLagBooster(tabId, domLagBoosterActive)
+                    }
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {

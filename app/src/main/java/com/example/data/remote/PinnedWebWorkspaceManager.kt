@@ -398,30 +398,11 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
     fun applyLagBooster(enabled: Boolean) {
         domLagBoosterActive = enabled
         val target = pinnedWebView ?: return
-        val js = if (enabled) {
-            """
-            (function() {
-              var id = 'antigravity-pulse-dom-booster';
-              var style = document.getElementById(id);
-              if (!style && document.head) {
-                style = document.createElement('style');
-                style.id = id;
-                document.head.appendChild(style);
-              }
-              if (style) {
-                style.textContent =
-                  '${RetainedWebViewManager.LAG_BOOSTER_CSS}';
-              }
-            })();
-            """.trimIndent()
-        } else {
-            """
-            (function() {
-              var el = document.getElementById('antigravity-pulse-dom-booster');
-              if (el && el.parentNode) { el.parentNode.removeChild(el); }
-            })();
-            """.trimIndent()
-        }
+        val js = WebViewOfflineCacheHelper.buildLagBoosterScript(
+            enabled = enabled,
+            styleElementId = "antigravity-pulse-dom-booster",
+            cssText = RetainedWebViewManager.LAG_BOOSTER_CSS
+        )
         target.post {
             try {
                 target.evaluateJavascript(js, null)
@@ -557,18 +538,7 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.BLACK)
-            setLayerType(View.LAYER_TYPE_NONE, null)
-            isNestedScrollingEnabled = false
-            // OVER_SCROLL_NEVER: Android 12+ "stretch" overscroll re-renders the entire WebView
-            // through an offscreen stretch layer while dragging past either end of the page,
-            // which is a well-known source of dropped frames on mid-range mobile GPUs.
-            overScrollMode = View.OVER_SCROLL_NEVER
-            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
-            // Pages paint their own scroll indicators; the native overlay scrollbar otherwise
-            // invalidates the WebView on every scroll frame.
-            isVerticalScrollBarEnabled = false
-            isHorizontalScrollBarEnabled = false
-            setInitialScale(0)
+            WebViewOfflineCacheHelper.configureScrollResponsiveWebView(this)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
                     setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
@@ -757,6 +727,19 @@ class PinnedWebWorkspaceSession(val workspace: DevWebWorkspace) {
                 ) {
                     handler?.cancel()
                     onPageEvent("Blocked untrusted SSL certificate in ${workspace.displayName} workspace.")
+                }
+
+                override fun onPageCommitVisible(view: WebView?, url: String?) {
+                    super.onPageCommitVisible(view, url)
+                    val isErrorPage = url.isNullOrBlank() ||
+                        url.startsWith("chrome-error:", ignoreCase = true) ||
+                        url.startsWith("about:", ignoreCase = true)
+                    if (!isErrorPage) {
+                        if (!_isDesktopModeState.value) {
+                            RetainedWebViewManager.injectMobileLayoutFix(view)
+                        }
+                        applyLagBooster(domLagBoosterActive)
+                    }
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
